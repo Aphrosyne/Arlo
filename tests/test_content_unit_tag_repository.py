@@ -25,7 +25,7 @@ def _seed_category(
     category_id: str = "c-1",
     name: str = "服装护甲",
 ) -> None:
-    TagCategoryRepository(conn).create(TagCategory(id=category_id, name=name, color_hue=210))
+    TagCategoryRepository(conn).create(TagCategory(id=category_id, name=name, color_hex="#1A78D6"))
 
 
 def _seed_tag(
@@ -41,8 +41,8 @@ def _seed_content_unit(
     conn: sqlite3.Connection, unit_id: str = "cu-1", path: str = "/mods/a"
 ) -> None:
     conn.execute(
-        "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-        "VALUES (?, ?, ?, 1, 't', 't')",
+        "INSERT INTO content_unit (id, path, path_key, created_at, updated_at) "
+        "VALUES (?, ?, ?, 't', 't')",
         (unit_id, path, make_path_key(path)),
     )
     conn.commit()

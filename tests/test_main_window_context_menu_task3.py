@@ -1,7 +1,7 @@
 """MainWindow 右键菜单集成测试（阶段 3 Task 3）。
 
 覆盖：
-- 创建 Mod 组菜单项仅在整理模式 + 单选文件 + 注入 ContentUnitCreationService 时显示
+- 创建 Mod 组菜单项在单选文件 + 注入 ContentUnitCreationService 时显示
 - 标记为内容单元 / 取消内容单元标记 菜单项根据 entry.content_unit 切换
 - 多选显示"批量标记为内容单元"
 - 复制路径始终显示
@@ -26,13 +26,12 @@ from PySide6.QtWidgets import QMessageBox  # noqa: E402
 from app.main_window import MainWindow  # noqa: E402
 from application.content_service import ContentService  # noqa: E402
 from application.content_unit_creation_service import ContentUnitCreationService  # noqa: E402
+from application.file_operation_service import FileOperationService  # noqa: E402
 from application.folder_tree_service import FolderTreeService  # noqa: E402
 from application.managed_root_service import ManagedRootService  # noqa: E402
 from application.scan_service import ScanService  # noqa: E402
-from application.staging_service import StagingService  # noqa: E402
-from domain.models import AppMode, FileEntry  # noqa: E402
+from domain.models import FileEntry  # noqa: E402
 from infrastructure.db import get_connection, init_db  # noqa: E402
-from infrastructure.file_operation_service import FileOperationService  # noqa: E402
 from infrastructure.folder_cache_sync_helper import FolderCacheSyncHelper  # noqa: E402
 from infrastructure.repositories.content_unit import ContentUnitRepository  # noqa: E402
 from infrastructure.repositories.folder_cache import FolderCacheRepository  # noqa: E402
@@ -40,7 +39,6 @@ from infrastructure.repositories.managed_root import ManagedRootRepository  # no
 from infrastructure.repositories.operation_history import (  # noqa: E402
     OperationHistoryRepository,
 )
-from infrastructure.repositories.staging_area import StagingAreaRepository  # noqa: E402
 
 
 def _make_mod_tree(tmp_path: Path) -> Path:
@@ -71,18 +69,14 @@ def main_window_env(qapp, tmp_path: Path):
 
     managed_service = ManagedRootService(
         ManagedRootRepository(conn),
-        now_provider=lambda: "2026-07-14T00:00:00Z",
-        uuid_provider=fake_uuid,
-    )
-    staging_service = StagingService(
-        StagingAreaRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
         now_provider=lambda: "2026-07-14T00:00:00Z",
         uuid_provider=fake_uuid,
     )
     tree_service = FolderTreeService(
         ManagedRootRepository(conn),
         FolderCacheRepository(conn),
-        staging_service=staging_service,
     )
     content_service = ContentService(ContentUnitRepository(conn))
     scan_service = ScanService(
@@ -105,8 +99,6 @@ def main_window_env(qapp, tmp_path: Path):
     # 扫描以填充 folder_cache（目录树才能显示 Stash 子节点）+
     # 自动标记压缩包为内容单元（BDOR/SkyUI）
     scan_service.scan_root(root.id, incremental=False)
-    # 标记暂存区
-    staging_service.mark_staging(root_dir / "Stash")
     conn.commit()
 
     window = MainWindow(
@@ -115,7 +107,6 @@ def main_window_env(qapp, tmp_path: Path):
         content_service,
         db_path,
         commit_callback=conn.commit,
-        staging_service=staging_service,
         content_unit_creation_service=content_unit_creation_service,
     )
     yield window, conn, root_dir, root
@@ -180,7 +171,6 @@ def test_context_menu_includes_mark_for_unmarked(qapp, main_window_env) -> None:
     """右键未标记条目 → 可调用 mark_as_content_unit 验证 service 链路。"""
     window, _, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     # 选中 preview.jpg（非压缩包，未自动标记）
@@ -208,10 +198,9 @@ def test_context_menu_includes_mark_for_unmarked(qapp, main_window_env) -> None:
 
 
 def test_mark_content_unit_refreshes_list(qapp, main_window_env) -> None:
-    """标记后中栏列表刷新，显示 [内容单元] 标记。"""
+    """标记后中栏列表刷新，显示 -- 标记。"""
     window, _, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
     _select_entry_by_name(qapp, window, "preview.jpg")
 
@@ -228,10 +217,9 @@ def test_mark_content_unit_refreshes_list(qapp, main_window_env) -> None:
 
 
 def test_unmark_content_unit_refreshes_list(qapp, main_window_env) -> None:
-    """取消标记后中栏列表刷新，[内容单元] 标记消失。"""
+    """取消标记后中栏列表刷新，-- 标记消失。"""
     window, conn, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     # 先标记 BDOR 文件
@@ -246,12 +234,11 @@ def test_unmark_content_unit_refreshes_list(qapp, main_window_env) -> None:
     window._on_unmark_content_unit(entry)  # noqa: SLF001
     qapp.processEvents()
 
-    # DB 中该 ContentUnit is_marked 应为 False（不删除记录，防止扫描重建）
+    # 纯 DELETE 模式（Task 6）：取消标记 = 删除记录
     unit = window._content_service.get_by_path(entry.path)  # noqa: SLF001
-    assert unit is not None
-    assert unit.is_marked is False
+    assert unit is None
 
-    # 列表刷新后该条目不再显示 [内容单元] 标记
+    # 列表刷新后该条目不再显示 -- 标记
     refreshed_entry = _find_entry_by_name(window, "BDOR Black Knight 1.0.7z")
     assert refreshed_entry is not None
     assert refreshed_entry.content_unit is None
@@ -261,7 +248,6 @@ def test_create_mod_group_full_flow(qapp, main_window_env) -> None:
     """创建 Mod 组完整流程：对话框接受默认名 → 文件夹创建 + 文件移动 + ContentUnit 创建。"""
     window, conn, root_dir, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     _select_entry_by_name(qapp, window, "BDOR Black Knight 1.0.7z")
@@ -275,7 +261,7 @@ def test_create_mod_group_full_flow(qapp, main_window_env) -> None:
     window._show_create_mod_group_dialog = lambda pure, full: pure  # noqa: SLF001
 
     try:
-        window._on_create_mod_group(entry)  # noqa: SLF001
+        window._on_create_mod_group([entry])  # noqa: SLF001
         qapp.processEvents()
     finally:
         window._show_create_mod_group_dialog = original_dialog  # noqa: SLF001
@@ -290,8 +276,7 @@ def test_create_mod_group_full_flow(qapp, main_window_env) -> None:
     # ContentUnit 创建
     unit = window._content_service.get_by_path(str(target_folder))  # noqa: SLF001
     assert unit is not None
-    assert unit.title == "BDOR Black Knight"
-    assert unit.is_marked is True
+    assert unit.path == str(target_folder)
     # operation_history 写入 2 条
     rows = conn.execute("SELECT * FROM operation_history").fetchall()
     assert len(rows) == 2
@@ -307,6 +292,92 @@ def test_create_mod_group_full_flow(qapp, main_window_env) -> None:
     assert old_entry is None
 
 
+def _select_multiple_entries(qapp, window: MainWindow, names: list[str]) -> list:
+    """在中栏多选指定名称的条目，返回 FileEntry 列表。"""
+    from PySide6.QtCore import QItemSelectionModel
+
+    model = window._content_list_model  # noqa: SLF001
+    view = window._content_view  # noqa: SLF001
+    sm = view.selectionModel()
+    sm.clear()
+    entries = []
+    for row in range(model.entry_count()):
+        entry = model.entry_at(row)
+        if entry is not None and entry.name in names:
+            idx = model.index(row, 0)
+            sm.select(idx, QItemSelectionModel.SelectionFlag.Select)
+            entries.append(entry)
+    qapp.processEvents()
+    assert len(entries) == len(names), f"期望选中 {len(names)} 项，实际 {len(entries)} 项"
+    return entries
+
+
+def test_create_mod_group_multi_select(qapp, main_window_env) -> None:
+    """UX 重构 Phase 1 Task 1 Commit 3：多选文件创建 Mod 组，所有文件移入同一文件夹。"""
+    window, _, root_dir, _ = main_window_env
+    _select_staging(qapp, window)
+    qapp.processEvents()
+
+    # 多选两个压缩包文件
+    entries = _select_multiple_entries(
+        qapp, window, ["BDOR Black Knight 1.0.7z", "SkyUI 5.1 SE.zip"]
+    )
+
+    # Mock 对话框返回指定名称
+    original_dialog = window._show_create_mod_group_dialog  # noqa: SLF001
+    window._show_create_mod_group_dialog = lambda pure, full: "CombinedMod"  # noqa: SLF001
+
+    try:
+        window._on_create_mod_group(entries)  # noqa: SLF001
+        qapp.processEvents()
+    finally:
+        window._show_create_mod_group_dialog = original_dialog  # noqa: SLF001
+
+    # 文件夹被创建
+    target_folder = root_dir / "Stash" / "CombinedMod"
+    assert target_folder.is_dir()
+    # 两个源文件都被移入
+    assert (target_folder / "BDOR Black Knight 1.0.7z").is_file()
+    assert (target_folder / "SkyUI 5.1 SE.zip").is_file()
+    assert not (root_dir / "Stash" / "BDOR Black Knight 1.0.7z").exists()
+    assert not (root_dir / "Stash" / "SkyUI 5.1 SE.zip").exists()
+    # ContentUnit 创建
+    unit = window._content_service.get_by_path(str(target_folder))  # noqa: SLF001
+    assert unit is not None
+
+
+def test_create_mod_group_menu_hidden_when_dir_selected(qapp, main_window_env) -> None:
+    """E1：多选含文件夹时不显示「创建 Mod 组」菜单项。"""
+    from app import ui_constants as ui
+    from domain.models import FileEntry
+
+    window, _, root_dir, _ = main_window_env
+    _select_staging(qapp, window)
+    qapp.processEvents()
+
+    # 选中 BDOR 文件 + preview.jpg（都是文件）→ 应显示创建 Mod 组
+    entries_files = _select_multiple_entries(
+        qapp, window, ["BDOR Black Knight 1.0.7z", "preview.jpg"]
+    )
+    actions = window._build_content_menu_actions(entries_files)  # noqa: SLF001
+    labels = [a[0] for a in actions]
+    assert ui.MENU_CREATE_MOD_GROUP in labels
+
+    # 选中文件 + 模拟文件夹条目 → 不应显示创建 Mod 组
+    fake_dir_entry = FileEntry(
+        name="fakedir",
+        path=str(root_dir / "Stash" / "fakedir"),
+        is_dir=True,
+        modified_at="2026-07-14T00:00:00Z",
+        size=None,
+        content_unit=None,
+    )
+    mixed_entries = [entries_files[0], fake_dir_entry]
+    actions_mixed = window._build_content_menu_actions(mixed_entries)  # noqa: SLF001
+    labels_mixed = [a[0] for a in actions_mixed]
+    assert ui.MENU_CREATE_MOD_GROUP not in labels_mixed
+
+
 def test_create_mod_group_appears_in_tree(qapp, main_window_env) -> None:
     """创建 Mod 组后目录树立即显示新文件夹（无需重新扫描）。
 
@@ -317,7 +388,6 @@ def test_create_mod_group_appears_in_tree(qapp, main_window_env) -> None:
     """
     window, conn, root_dir, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     tree_model = window._tree_model  # noqa: SLF001
@@ -349,7 +419,7 @@ def test_create_mod_group_appears_in_tree(qapp, main_window_env) -> None:
         window._content_view.currentIndex().row()  # noqa: SLF001
     )
     window._show_create_mod_group_dialog = lambda pure, full: pure  # noqa: SLF001
-    window._on_create_mod_group(entry)  # noqa: SLF001
+    window._on_create_mod_group([entry])  # noqa: SLF001
     qapp.processEvents()
 
     # 刷新后暂存区子节点应包含新文件夹
@@ -361,7 +431,6 @@ def test_create_mod_group_cancel_dialog(qapp, main_window_env) -> None:
     """取消对话框不操作文件。"""
     window, _, root_dir, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     _select_entry_by_name(qapp, window, "BDOR Black Knight 1.0.7z")
@@ -372,7 +441,7 @@ def test_create_mod_group_cancel_dialog(qapp, main_window_env) -> None:
     # Mock 对话框返回 None（用户取消）
     window._show_create_mod_group_dialog = lambda pure, full: None  # noqa: SLF001
 
-    window._on_create_mod_group(entry)  # noqa: SLF001
+    window._on_create_mod_group([entry])  # noqa: SLF001
     qapp.processEvents()
 
     # 无文件夹创建
@@ -385,7 +454,6 @@ def test_create_mod_group_name_conflict(qapp, main_window_env, monkeypatch) -> N
     """同名文件夹已存在 → 弹出错误（不抛异常，仅 QMessageBox）。"""
     window, _, root_dir, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     # 预先创建同名文件夹
@@ -397,11 +465,11 @@ def test_create_mod_group_name_conflict(qapp, main_window_env, monkeypatch) -> N
     )
     window._show_create_mod_group_dialog = lambda pure, full: pure  # noqa: SLF001
 
-    # Mock QMessageBox 避免阻塞
-    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **kw: None)
+    # Mock QMessageBox 避免阻塞（UX 重构 Phase 2 Task 5 Q3=C：warning→information）
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: None)
 
     # 应不抛异常（QMessageBox 被 mock）
-    window._on_create_mod_group(entry)  # noqa: SLF001
+    window._on_create_mod_group([entry])  # noqa: SLF001
     qapp.processEvents()
 
     # 源文件仍在原位（未被移动）
@@ -412,7 +480,6 @@ def test_batch_mark_multiple_files(qapp, main_window_env) -> None:
     """多选 2 个未标记文件 → 批量标记 → 各自独立 ContentUnit。"""
     window, conn, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     # 多选 preview.jpg + SkyUI 5.1 SE.zip（后者已被扫描自动标记，先取消）
@@ -454,7 +521,6 @@ def test_batch_unmark_content_unit(qapp, main_window_env) -> None:
     """Task 2 验收修复：多选含已标记项 → 批量取消 → 全部取消标记。"""
     window, conn, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     # SkyUI 已被扫描自动标记，preview.jpg 需手动标记
@@ -478,18 +544,16 @@ def test_batch_unmark_content_unit(qapp, main_window_env) -> None:
     window._on_batch_unmark_content_unit(target_entries)  # noqa: SLF001
     qapp.processEvents()
 
-    # 所有条目应取消标记（is_marked 变为 False）
+    # 纯 DELETE 模式（Task 6）：所有条目记录应被删除
     for e in target_entries:
         unit = window._content_service.get_by_path(e.path)  # noqa: SLF001
-        assert unit is not None, "取消标记不删除记录"
-        assert unit.is_marked is False, f"{e.name} is_marked 应为 False"
+        assert unit is None, f"{e.name} 取消标记后记录应被删除"
 
 
 def test_batch_unmark_skips_unmarked_entries(qapp, main_window_env) -> None:
     """Task 2 验收修复：批量取消时未标记项跳过，不报错。"""
     window, _, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     # SkyUI 已标记，preview.jpg 未标记
@@ -514,7 +578,6 @@ def test_batch_unmark_menu_visible_when_any_marked(qapp, main_window_env) -> Non
     """Task 2 验收修复：多选且至少一个已标记时，右键菜单显示批量取消项。"""
     window, _, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     model = window._content_list_model  # noqa: SLF001
@@ -541,7 +604,6 @@ def test_batch_unmark_menu_hidden_when_none_marked(qapp, main_window_env) -> Non
     """Task 2 验收修复：多选且全部未标记时，右键菜单仅显示批量标记，不显示批量取消。"""
     window, _, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     # 先取消所有标记
@@ -573,7 +635,6 @@ def test_batch_mark_menu_hidden_when_all_marked(qapp, main_window_env) -> None:
     """Stage 5 Task 2 验收修复：多选且全部已标记时，仅显示批量取消，不显示批量标记。"""
     window, _, _, _ = main_window_env
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     # 把暂存区所有条目都标记为内容单元
@@ -611,7 +672,6 @@ def test_chinese_filename_mod_group(qapp, main_window_env) -> None:
     (root_dir / "Stash" / "寒霜之心 1.0.7z").write_bytes(b"\x00" * 100)
 
     _select_staging(qapp, window)
-    window._set_mode(AppMode.organize)  # noqa: SLF001
     qapp.processEvents()
 
     _select_entry_by_name(qapp, window, "寒霜之心 1.0.7z")
@@ -620,7 +680,7 @@ def test_chinese_filename_mod_group(qapp, main_window_env) -> None:
     )
     window._show_create_mod_group_dialog = lambda pure, full: pure  # noqa: SLF001
 
-    window._on_create_mod_group(entry)  # noqa: SLF001
+    window._on_create_mod_group([entry])  # noqa: SLF001
     qapp.processEvents()
 
     target_folder = root_dir / "Stash" / "寒霜之心"

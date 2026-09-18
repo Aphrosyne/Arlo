@@ -6,9 +6,7 @@
 - 双击内容单元 → 同样加载（兼容行为，不应破坏）
 - 单击非内容单元 → 清空元数据面板
 - 保存元数据 → on_saved 信号 → 事务提交 + 状态栏提示
-- 设置封面 → CoverPickerDialog 弹出 + 选定后更新表单
-- 整理模式 → 右栏元数据面板保留可见（2026-07-25 决策修正：原决策 4/8 被推翻，方案 B）
-- 浏览模式 → 右栏元数据面板可见
+- 设置封面 → CoverPickerDialog 弹出 + 选定后立即保存（操作便捷性6）
 - 批量打标签菜单：多选内容单元 → 右键显示菜单
 - 批量打标签动作：弹 BatchTagDialog + 应用 → 提交
 
@@ -25,16 +23,21 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import Qt  # noqa: E402
+from PySide6.QtCore import QSettings, Qt  # noqa: E402
+from PySide6.QtWidgets import QDialog, QMenu  # noqa: E402
 
+from app import ui_constants as ui  # noqa: E402
 from app.main_window import MainWindow  # noqa: E402
+from app.recent_tags import RecentTags  # noqa: E402
+from app.tag_manager_dialog import TagManagerDialog  # noqa: E402
 from application.content_service import ContentService  # noqa: E402
+from application.file_operation_service import FileOperationService  # noqa: E402
 from application.folder_tree_service import FolderTreeService  # noqa: E402
 from application.managed_root_service import ManagedRootService  # noqa: E402
 from application.scan_service import ScanService  # noqa: E402
 from application.tag_service import TagService  # noqa: E402
-from domain.models import AppMode  # noqa: E402
 from infrastructure.db import get_connection, init_db  # noqa: E402
+from infrastructure.folder_cache_sync_helper import FolderCacheSyncHelper  # noqa: E402
 from infrastructure.repositories.content_unit import (  # noqa: E402
     ContentUnitRepository,
 )
@@ -47,6 +50,9 @@ from infrastructure.repositories.folder_cache import (  # noqa: E402
 from infrastructure.repositories.managed_root import (  # noqa: E402
     ManagedRootRepository,
 )
+from infrastructure.repositories.operation_history import (  # noqa: E402
+    OperationHistoryRepository,
+)
 from infrastructure.repositories.tag import TagRepository  # noqa: E402
 from infrastructure.repositories.tag_category import (  # noqa: E402
     TagCategoryRepository,
@@ -54,7 +60,36 @@ from infrastructure.repositories.tag_category import (  # noqa: E402
 
 
 class _FakeAction:
-    """模拟 QAction：仅提供 setEnabled no-op，供 FakeMenu.addAction 返回。"""
+    """模拟 QAction：提供菜单构建所需的属性/方法，供 FakeMenu.addAction 返回。"""
+
+    def __init__(self, text: str = "") -> None:
+        self._text = text
+        self._tooltip: str | None = None
+
+    def text(self) -> str:
+        return self._text
+
+    def setToolTip(self, tooltip: str) -> None:  # noqa: ANN001 (Qt 签名)
+        self._tooltip = tooltip
+
+    def setEnabled(self, enabled: bool) -> None:  # noqa: ANN001 (Qt 签名)
+        pass
+
+    def menu(self):
+        """子菜单容器（本替身不支持，返回 None 即可）。"""
+        return None
+
+    @property
+    def triggered(self):
+        """信号对象（提供 connect no-op，供最近目标子菜单连接）。"""
+        return _FakeSignal()
+
+
+class _FakeSignal:
+    """模拟 Qt Signal：connect no-op。"""
+
+    def connect(self, slot) -> None:  # noqa: ANN001
+        pass
 
     def setEnabled(self, enabled: bool) -> None:  # noqa: ANN001 (Qt 签名)
         pass
@@ -68,7 +103,8 @@ def _make_mod_tree_with_units(tmp_path: Path) -> Path:
         ├── 护甲/
         │   ├── 寒霜之心.7z   # 内容单元
         │   ├── preview1.jpg  # 非内容单元
-        │   └── preview2.png   # 非内容单元
+        │   ├── preview2.png   # 非内容单元
+        │   └── notes.txt      # 非内容单元（非图片）
         └── Weapons/
             └── DragonSword.rar  # 内容单元
     """
@@ -80,6 +116,7 @@ def _make_mod_tree_with_units(tmp_path: Path) -> Path:
     (armor / "寒霜之心.7z").write_bytes(b"\x00" * 100)
     (armor / "preview1.jpg").write_bytes(b"\x00" * 50)
     (armor / "preview2.png").write_bytes(b"\x00" * 50)
+    (armor / "notes.txt").write_bytes(b"hello")
 
     weapons = root / "Weapons"
     weapons.mkdir()
@@ -135,6 +172,8 @@ def main_window_with_tags(qapp, tmp_path: Path):
 
     managed_service = ManagedRootService(
         ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
         now_provider=lambda: "2026-07-19T00:00:00Z",
         uuid_provider=fake_uuid,
     )
@@ -193,6 +232,8 @@ def test_metadata_panel_not_created_without_tag_service(qapp, tmp_path: Path):
 
     managed_service = ManagedRootService(
         ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
         now_provider=lambda: "2026-07-19T00:00:00Z",
     )
     tree_service = FolderTreeService(
@@ -227,31 +268,39 @@ def test_metadata_panel_hidden_initially(qapp, main_window_with_tags):
 # === 加载内容单元 ===
 
 
-def test_double_click_content_unit_loads_into_panel(qapp, main_window_with_tags):
-    """双击内容单元 → MetadataPanel 加载 + 字段填充。"""
+def test_select_content_unit_loads_into_panel(qapp, main_window_with_tags):
+    """选中内容单元 → MetadataPanel 加载 + 字段填充（双击现为打开文件，操作合理性1）。"""
     window, _, _, _ = main_window_with_tags
     _select_root(qapp, window)
     _navigate_to_armor(qapp, window)
 
-    # 双击寒霜之心.7z（内容单元）
+    # 单击选中寒霜之心.7z（内容单元）
     idx = _find_entry_index(window, "寒霜之心.7z")
-    window._on_entry_activated(window._content_list_model.index(idx, 0))  # noqa: SLF001
+    window._content_view.selectRow(idx)  # noqa: SLF001
     qapp.processEvents()
 
     panel = window.metadata_panel()
     assert panel is not None
     assert panel.current_unit() is not None
-    assert panel.current_unit().title == "寒霜之心.7z"
+    assert panel.rename_text() == "寒霜之心.7z"  # 重命名栏显示真实文件名
     assert panel.is_form_enabled()
 
 
-def test_double_click_non_content_unit_does_not_load(qapp, main_window_with_tags):
-    """双击非内容单元 → MetadataPanel 不加载（保持初始状态）。"""
-    window, _, _, _ = main_window_with_tags
+def test_double_click_non_content_unit_does_not_load_panel(
+    qapp, main_window_with_tags, monkeypatch: pytest.MonkeyPatch
+):
+    """双击非内容单元 → 系统默认程序打开，但 MetadataPanel 不加载（保持初始状态）。"""
+    window, _, root_dir, _ = main_window_with_tags
     _select_root(qapp, window)
     _navigate_to_armor(qapp, window)
 
-    # 双击 preview1.jpg（非内容单元）
+    subprocess_calls: list[list[str]] = []
+    monkeypatch.setattr(
+        "app.content_list_controller.subprocess.run",
+        lambda args, **kwargs: subprocess_calls.append(args),
+    )
+
+    # 双击 preview1.jpg（非内容单元，操作合理性1：打开文件）
     idx = _find_entry_index(window, "preview1.jpg")
     window._on_entry_activated(window._content_list_model.index(idx, 0))  # noqa: SLF001
     qapp.processEvents()
@@ -260,6 +309,7 @@ def test_double_click_non_content_unit_does_not_load(qapp, main_window_with_tags
     assert panel is not None
     assert panel.current_unit() is None
     assert not panel.is_form_enabled()
+    assert subprocess_calls == [["cmd", "/c", "start", "", str(root_dir / "护甲" / "preview1.jpg")]]
 
 
 def test_single_click_content_unit_loads_into_panel(qapp, main_window_with_tags):
@@ -281,7 +331,7 @@ def test_single_click_content_unit_loads_into_panel(qapp, main_window_with_tags)
     panel = window.metadata_panel()
     assert panel is not None
     assert panel.current_unit() is not None
-    assert panel.current_unit().title == "寒霜之心.7z"
+    assert panel.rename_text() == "寒霜之心.7z"
     assert panel.is_form_enabled()
 
 
@@ -299,51 +349,131 @@ def test_single_click_non_content_unit_clears_panel(qapp, main_window_with_tags)
     panel = window.metadata_panel()
     assert panel is not None and panel.current_unit() is not None
 
-    # 再单击 preview1.jpg（非内容单元）
-    idx_preview = _find_entry_index(window, "preview1.jpg")
-    view.selectRow(idx_preview)
+    # 再单击 notes.txt（非内容单元、非图片）
+    idx_txt = _find_entry_index(window, "notes.txt")
+    view.selectRow(idx_txt)
     qapp.processEvents()
 
     assert panel.current_unit() is None
     assert not panel.is_form_enabled()
 
 
+def test_single_click_image_file_shows_preview(qapp, main_window_with_tags):
+    """操作合理性2：单击非内容单元图片文件 → 元数据面板进入图片预览模式。"""
+    window, _, _, _ = main_window_with_tags
+    _select_root(qapp, window)
+    _navigate_to_armor(qapp, window)
+
+    view = window._content_view  # noqa: SLF001
+    idx = _find_entry_index(window, "preview1.jpg")
+    view.selectRow(idx)
+    qapp.processEvents()
+
+    panel = window.metadata_panel()
+    assert panel is not None
+    assert panel.is_image_preview_visible()
+    assert panel.current_unit() is None
+    assert not panel.is_form_enabled()
+    assert panel.preview_name_text() == "preview1.jpg"
+
+
+def test_select_non_image_after_image_preview_resets(qapp, main_window_with_tags):
+    """操作合理性2：图片预览后再选中非图片文件 → 退出预览并清空面板。"""
+    window, _, _, _ = main_window_with_tags
+    _select_root(qapp, window)
+    _navigate_to_armor(qapp, window)
+
+    view = window._content_view  # noqa: SLF001
+    idx_img = _find_entry_index(window, "preview1.jpg")
+    view.selectRow(idx_img)
+    qapp.processEvents()
+    panel = window.metadata_panel()
+    assert panel.is_image_preview_visible()
+
+    idx_txt = _find_entry_index(window, "notes.txt")
+    view.selectRow(idx_txt)
+    qapp.processEvents()
+
+    assert not panel.is_image_preview_visible()
+    assert panel.current_unit() is None
+
+
 # === 保存元数据 ===
 
 
 def test_save_metadata_commits_and_shows_status(qapp, main_window_with_tags):
-    """编辑标题 + 保存 → 事务提交 + 状态栏显示「元数据已保存」。"""
+    """编辑备注 + 保存 → 事务提交 + 状态栏显示「元数据已保存」（title 不再写）。"""
     window, conn, _, _ = main_window_with_tags
     _select_root(qapp, window)
     _navigate_to_armor(qapp, window)
 
-    # 双击寒霜之心.7z
+    # 单击选中寒霜之心.7z
     idx = _find_entry_index(window, "寒霜之心.7z")
-    window._on_entry_activated(window._content_list_model.index(idx, 0))  # noqa: SLF001
+    window._content_view.selectRow(idx)  # noqa: SLF001
     qapp.processEvents()
 
     panel = window.metadata_panel()
     assert panel is not None
 
-    # 修改标题
-    panel._title_edit.setText("新标题")  # noqa: SLF001
+    # 修改备注
+    panel._notes_edit.setPlainText("新备注")  # noqa: SLF001
     panel.click_save_button()
     qapp.processEvents()
 
     # 状态栏应有提示
     assert "已保存" in window.statusBar().currentMessage()
 
-    # 数据库中的标题应已更新
+    # 数据库中的备注应已更新
     unit_id = panel.current_unit().id
-    row = conn.execute("SELECT title FROM content_unit WHERE id = ?", (unit_id,)).fetchone()
-    assert row["title"] == "新标题"
+    row = conn.execute("SELECT notes FROM content_unit WHERE id = ?", (unit_id,)).fetchone()
+    assert row["notes"] == "新备注"
+
+
+def test_metadata_rename_request_renames_file(qapp, main_window_with_tags):
+    """UI合理性13：面板重命名栏回车 → 真实文件重命名 + DB 路径更新 + 面板刷新。"""
+    window, conn, _, _ = main_window_with_tags
+    _select_root(qapp, window)
+    _navigate_to_armor(qapp, window)
+
+    idx = _find_entry_index(window, "寒霜之心.7z")
+    window._content_view.selectRow(idx)  # noqa: SLF001
+    qapp.processEvents()
+
+    panel = window.metadata_panel()
+    assert panel is not None
+    unit = panel.current_unit()
+    assert unit is not None
+    old_path = Path(unit.path)
+
+    # 注入文件操作服务（fixture 未注入，重命名走 FileOperationService 链路）
+    window._file_operation_service = FileOperationService(  # noqa: SLF001
+        OperationHistoryRepository(conn),
+        folder_cache_helper=FolderCacheSyncHelper(FolderCacheRepository(conn)),
+        content_unit_repo=ContentUnitRepository(conn),
+    )
+
+    # 模拟重命名栏回车（信号链路：panel → MetadataView → MainWindow）
+    window._metadata_view.rename_requested.emit(unit.id, "新名字.7z")  # noqa: SLF001
+    qapp.processEvents()
+
+    new_path = old_path.parent / "新名字.7z"
+    assert new_path.is_file()
+    assert not old_path.exists()
+    updated = window._content_service.get_by_id(unit.id)  # noqa: SLF001
+    assert updated is not None
+    assert updated.path == str(new_path)
+    assert panel.rename_text() == "新名字.7z"
+    assert "已重命名" in window.statusBar().currentMessage()
+    # 操作历史已记录（undo 可用）
+    rows = conn.execute("SELECT operation_type FROM operation_history").fetchall()
+    assert any(r["operation_type"] == "rename" for r in rows)
 
 
 # === 设置封面 ===
 
 
 def test_pick_cover_button_launches_dialog(qapp, main_window_with_tags, monkeypatch):
-    """点击设置封面按钮 → 弹出 CoverPickerDialog（目录类型内容单元 + 含图片）。"""
+    """点击设置封面 → 弹出对话框；确定后立即保存到数据库（操作便捷性6）。"""
     window, conn, root_dir, _ = main_window_with_tags
 
     # 标记"护甲"目录为内容单元（目录类型，包含图片候选 preview1.jpg / preview2.png）
@@ -351,6 +481,7 @@ def test_pick_cover_button_launches_dialog(qapp, main_window_with_tags, monkeypa
     content_service = window._content_service  # noqa: SLF001
     unit = content_service.mark_as_content_unit(armor_dir)
     conn.commit()
+    assert unit.cover_path == "preview1.jpg"  # 标记时自动录入第一张
 
     # 直接加载到 MetadataPanel（避免复杂的 UI 导航）
     panel = window.metadata_panel()
@@ -366,12 +497,23 @@ def test_pick_cover_button_launches_dialog(qapp, main_window_with_tags, monkeypa
         return 1  # QDialog.Accepted
 
     monkeypatch.setattr("app.cover_picker_dialog.QDialog.exec", fake_exec)
+    # 固定对话框选择 preview2.png（覆盖自动选中的第一张）
+    monkeypatch.setattr(
+        "app.cover_picker_dialog.CoverPickerDialog.selected_relative_path",
+        lambda self: "preview2.png",
+    )
 
     panel.click_pick_cover_button()
     qapp.processEvents()
 
     # 应该弹出了 dialog
     assert len(dialog_instances) == 1
+    # 操作便捷性6：确定后立即落库，无需再点「保存」
+    updated = content_service.get_by_id(unit.id)
+    assert updated is not None
+    assert updated.cover_path == "preview2.png"
+    assert panel.cover_path_text() == "preview2.png"
+    assert window.statusBar().currentMessage() == ui.METADATA_PANEL_COVER_SAVED
 
 
 def test_pick_cover_no_images_shows_information(qapp, main_window_with_tags, monkeypatch):
@@ -402,40 +544,6 @@ def test_pick_cover_no_images_shows_information(qapp, main_window_with_tags, mon
     assert len(info_calls) == 1
 
 
-# === 整理模式保留右栏（2026-07-25 决策修正：原决策 4/8 被推翻） ===
-
-
-def test_organize_mode_keeps_metadata_panel_visible(qapp, main_window_with_tags):
-    """整理模式 → 右栏 MetadataPanel 保留可见（决策 4/8 修正为方案 B）。
-
-    背景：原决策 4/8 整理模式完全隐藏右栏，但实测后右侧空白，无法释放空间。
-    用户决策改为方案 B：保留 MetadataPanel，让用户在装配同时编辑元数据，
-    避免创建完内容单元后切回浏览模式才能编辑元数据的多余步骤。
-    """
-    window, _, _, _ = main_window_with_tags
-    # 浏览模式：右栏可见
-    assert window.is_metadata_panel_visible()
-
-    # 切换到整理模式
-    window._set_mode(AppMode.organize)  # noqa: SLF001
-    qapp.processEvents()
-
-    # 整理模式：右栏 MetadataPanel 仍可见
-    assert window.is_metadata_panel_visible()
-
-
-def test_organize_to_browse_keeps_metadata_panel_visible(qapp, main_window_with_tags):
-    """整理 → 浏览 → 右栏 MetadataPanel 全程保留可见。"""
-    window, _, _, _ = main_window_with_tags
-    window._set_mode(AppMode.organize)  # noqa: SLF001
-    qapp.processEvents()
-    assert window.is_metadata_panel_visible()
-
-    window._set_mode(AppMode.browse)  # noqa: SLF001
-    qapp.processEvents()
-    assert window.is_metadata_panel_visible()
-
-
 # === 批量打标签菜单 ===
 
 
@@ -456,13 +564,26 @@ def test_batch_tag_menu_appears_for_multi_selection(qapp, main_window_with_tags)
     class FakeMenu:
         def __init__(self, *args, **kwargs):
             self._actions = []
+            self._title = args[0] if args else ""
 
         def addAction(self, label):
-            self._actions.append(label)
-            return _FakeAction()
+            act = _FakeAction(label)
+            self._actions.append(act)
+            return act
+
+        def actions(self):
+            return list(self._actions)
+
+        def insertMenu(self, before_action, submenu):
+            """在指定 action 前插入子菜单（记录到 actions，供最近目标测试）。"""
+            idx = self._actions.index(before_action)
+            self._actions.insert(idx, _FakeAction(f"<submenu:{submenu._title}>"))
+
+        def addMenu(self, submenu):
+            self._actions.append(_FakeAction(f"<submenu:{submenu._title}>"))
 
         def exec(self, *args, **kwargs):
-            menu_items.extend(self._actions)
+            menu_items.extend(a.text() for a in self._actions)
             return None
 
     import app.main_window as mw_module
@@ -494,13 +615,25 @@ def test_batch_tag_menu_not_appears_for_single_selection(qapp, main_window_with_
     class FakeMenu:
         def __init__(self, *args, **kwargs):
             self._actions = []
+            self._title = args[0] if args else ""
 
         def addAction(self, label):
-            self._actions.append(label)
-            return _FakeAction()
+            act = _FakeAction(label)
+            self._actions.append(act)
+            return act
+
+        def actions(self):
+            return list(self._actions)
+
+        def insertMenu(self, before_action, submenu):
+            idx = self._actions.index(before_action)
+            self._actions.insert(idx, _FakeAction(f"<submenu:{submenu._title}>"))
+
+        def addMenu(self, submenu):
+            self._actions.append(_FakeAction(f"<submenu:{submenu._title}>"))
 
         def exec(self, *args, **kwargs):
-            menu_items.extend(self._actions)
+            menu_items.extend(a.text() for a in self._actions)
             return None
 
     import app.main_window as mw_module
@@ -515,11 +648,57 @@ def test_batch_tag_menu_not_appears_for_single_selection(qapp, main_window_with_
     assert "批量打标签" not in menu_items
 
 
+def test_insert_recent_tag_submenu(qapp, main_window_with_tags, tmp_path):
+    """UI合理性8：右键「添加最近标签 ▸」子菜单按最近顺序列出标签。"""
+    window, _, _, tag_service = main_window_with_tags
+    # 隔离最近标签（避免污染真实 QSettings）
+    window._recent_tags = RecentTags(  # noqa: SLF001
+        QSettings(str(tmp_path / "recent_tags.ini"), QSettings.Format.IniFormat)
+    )
+    cat = tag_service.create_category("分类A", color_hex="#D61A1A")
+    tag = tag_service.create_tag("测试标签A", cat.id)
+    window._recent_tags.record(tag.id)  # noqa: SLF001
+
+    menu = QMenu()
+    window._insert_recent_tag_submenu(menu, "unit-id")  # noqa: SLF001
+
+    actions = menu.actions()
+    assert len(actions) == 1
+    submenu = actions[0].menu()
+    assert submenu is not None
+    assert submenu.title() == ui.MENU_ADD_RECENT_TAG
+    assert [a.text() for a in submenu.actions()] == ["测试标签A"]
+
+
+def test_on_add_recent_tag_attaches_and_records(qapp, main_window_with_tags, tmp_path):
+    """UI合理性8：右键「添加最近标签」点击 → 立即 attach + 提交 + 记录最近。"""
+    window, conn, root_dir, tag_service = main_window_with_tags
+    window._recent_tags = RecentTags(  # noqa: SLF001
+        QSettings(str(tmp_path / "recent_tags.ini"), QSettings.Format.IniFormat)
+    )
+    cat = tag_service.create_category("分类B", color_hex="#D6781A")
+    tag = tag_service.create_tag("测试标签B", cat.id)
+
+    unit = window._content_service.get_by_path(  # noqa: SLF001
+        str(root_dir / "护甲" / "寒霜之心.7z")
+    )
+    assert unit is not None
+
+    window._on_add_recent_tag(unit.id, tag.id)  # noqa: SLF001
+
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM content_unit_tag WHERE content_unit_id = ? AND tag_id = ?",
+        (unit.id, tag.id),
+    ).fetchone()
+    assert rows[0] == 1
+    assert window._recent_tags.list_recent() == [tag.id]  # noqa: SLF001
+
+
 def test_batch_tag_action_commits_and_attaches(qapp, main_window_with_tags, monkeypatch):
     """点击批量打标签 → BatchTagDialog 弹出 → 添加标签 → 提交到数据库。"""
     window, conn, _, tag_service = main_window_with_tags
     # 创建一个标签用于测试
-    cat = tag_service.create_category("服装护甲", color_hue=210)
+    cat = tag_service.create_category("服装护甲", color_hex="#1A78D6")
     created_tag = tag_service.create_tag("重甲", cat.id)
     conn.commit()
 
@@ -578,9 +757,44 @@ def test_metadata_full_text_backward_compat(qapp, main_window_with_tags):
     _navigate_to_armor(qapp, window)
 
     idx = _find_entry_index(window, "寒霜之心.7z")
-    window._on_entry_activated(window._content_list_model.index(idx, 0))  # noqa: SLF001
+    window._content_view.selectRow(idx)  # noqa: SLF001
     qapp.processEvents()
 
     text = window.metadata_full_text()
-    assert "标题" in text
+    assert "标题" not in text  # UI合理性13：多行文本不再含标题行
+    assert "路径" in text
     assert "寒霜之心.7z" in text
+
+
+def test_tag_manager_changes_refresh_metadata_panel(qapp, main_window_with_tags, monkeypatch):
+    """BugFix2 验收反馈：标签管理关闭后，元数据面板当前单元标签即时刷新。"""
+    window, conn, _, tag_service = main_window_with_tags
+    _select_root(qapp, window)
+    _navigate_to_armor(qapp, window)
+
+    view = window._content_view  # noqa: SLF001
+    idx = _find_entry_index(window, "寒霜之心.7z")
+    view.selectRow(idx)
+    qapp.processEvents()
+
+    panel = window.metadata_panel()
+    unit = panel.current_unit()
+    assert unit is not None
+
+    # 先给该单元挂一个标签（面板尚未刷新，chip 应为空）
+    cat = tag_service.create_category("状态")
+    tag = tag_service.create_tag("已测试", cat.id)
+    tag_service.attach_tag_to_unit(unit.id, tag.id)
+    conn.commit()
+    assert panel.tag_chips() == []
+
+    # 模拟打开标签管理对话框：exec 中把标签改名并提交
+    def fake_exec(self):
+        tag_service.rename_tag(tag.id, "已改名")
+        conn.commit()
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(TagManagerDialog, "exec", fake_exec)
+    window._on_tag_manager_clicked()
+
+    assert panel.tag_chips() == ["已改名"]

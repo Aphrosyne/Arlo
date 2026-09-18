@@ -1,6 +1,6 @@
 """migrations 模块测试。
 
-覆盖 v0→v1 / v1→v2 / v2→v3 / v3→v4 / v4→v5 / v5→v6 / v6→v7 / v8→v9 迁移。
+覆盖 v0→v1 / v1→v2 / v2→v3 / v3→v4 / v4→v5 / v5→v6 / v6→v7 / v8→v9 / v11→v12 迁移。
 v3→v4 为方向 C 重建：新建 content_unit 等表，移除 mod_item / file_asset /
 folder_node / operation_log，重建 thumbnail_cache（FK 改为 content_unit）。
 v4→v5 新增 staging_area 表（阶段 3 Task 1 暂存区标记）。
@@ -8,6 +8,12 @@ v5→v6 移除 content_unit.rating 列 + 加 tag_category.name / tag(name, categ
 UNIQUE 约束（阶段 4 Task 1）。
 v6→v7 thumbnail_cache 新增 size 列 + 复合主键 (content_unit_id, size)（Task 1a）。
 v8→v9 operation_history.operation_type CHECK 约束扩展 'copy'（Stage 5 Task 3b）。
+v11→v12 删除 staging_area 表（UX 重构 Phase 1 Task 1 Commit 2：暂存区功能移除）。
+v12→v13 移除 content_unit.is_marked 字段（UX 重构 Task 6：回归纯 DELETE 模式）。
+v13→v14 operation_history.operation_type CHECK 约束扩展 'strip'
+（操作便捷性1：提取内容/剥离操作）。
+v14→v15 删除 content_unit.title 列 + tag_category.color_hue → color_hex
+（2026-08-05 两个 schema 升级 issue 合并迁移）。
 """
 
 from __future__ import annotations
@@ -26,6 +32,10 @@ from infrastructure.migrations import (
     migrate_v6_to_v7,
     migrate_v7_to_v8,
     migrate_v8_to_v9,
+    migrate_v11_to_v12,
+    migrate_v12_to_v13,
+    migrate_v13_to_v14,
+    migrate_v14_to_v15,
 )
 
 
@@ -45,11 +55,15 @@ def test_migrations_sorted_by_target() -> None:
     assert MIGRATIONS[8][0] == 9
     assert MIGRATIONS[9][0] == 10
     assert MIGRATIONS[10][0] == 11
+    assert MIGRATIONS[11][0] == 12
+    assert MIGRATIONS[12][0] == 13
+    assert MIGRATIONS[13][0] == 14
+    assert MIGRATIONS[14][0] == 15
 
 
-def test_current_schema_version_is_eleven() -> None:
-    """Stage 5 Code Review：当前 schema 版本应为 11（is_marked + path_key + D4 + M12）。"""
-    assert CURRENT_SCHEMA_VERSION == 11
+def test_current_schema_version_is_fifteen() -> None:
+    """schema v15：删除 content_unit.title + tag_category 完整颜色。"""
+    assert CURRENT_SCHEMA_VERSION == 15
 
 
 def test_migrate_v0_to_v1_idempotent() -> None:
@@ -510,7 +524,7 @@ def test_init_db_migrates_from_v0_to_current(tmp_path) -> None:
     db_path = tmp_path / "test.db"
     version = init_db(db_path)
     assert version == CURRENT_SCHEMA_VERSION
-    assert version == 11
+    assert version == 15
 
     # v7 后 managed_root 表仍存在
     conn = sqlite3.connect(str(db_path))
@@ -526,11 +540,11 @@ def test_init_db_migrates_from_v0_to_current(tmp_path) -> None:
         ).fetchone()
         assert row is not None
 
-        # v6 后 staging_area 表存在
+        # v12 后 staging_area 表已删除（UX 重构 Phase 1 Task 1 Commit 2）
         row = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='staging_area'"
         ).fetchone()
-        assert row is not None
+        assert row is None
 
         # v6 后旧表 mod_item 不存在
         row = conn.execute(
@@ -567,10 +581,10 @@ def test_init_db_idempotent_at_current(tmp_path) -> None:
 
 
 def test_init_db_migrates_v3_db_to_v6(tmp_path) -> None:
-    """已存在 v3 数据库的 init_db 应迁移到 v6。
+    """已存在 v3 数据库的 init_db 应迁移到当前版本。
 
     模拟真实场景：用户已有 v3 数据库（含 managed_root 数据），
-    升级后 managed_root 数据应保留，旧业务表被移除，staging_area 表被创建，
+    升级后 managed_root 数据应保留，旧业务表被移除，
     rating 列被移除，UNIQUE 约束已建立。
     """
     db_path = tmp_path / "test.db"
@@ -604,9 +618,9 @@ def test_init_db_migrates_v3_db_to_v6(tmp_path) -> None:
     finally:
         conn.close()
 
-    # init_db 应识别 v3 并依次应用 v3→v4→v5→v6→v7→v8→v9→v10→v11
+    # init_db 应识别 v3 并依次应用 v3→v4→...→v15
     version = init_db(db_path)
-    assert version == 11
+    assert version == 15
 
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -938,5 +952,342 @@ def test_migrate_v8_to_v9_skips_when_table_absent() -> None:
             "SELECT name FROM sqlite_master WHERE type='table' AND name='operation_history'"
         ).fetchone()
         assert row is None
+    finally:
+        conn.close()
+
+
+# --- v11 → v12 迁移测试（UX 重构 Phase 1 Task 1 Commit 2） ---
+
+
+def test_migrate_v11_to_v12_drops_staging_area_table() -> None:
+    """v11→v12 迁移应删除 staging_area 表。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        # 手动创建 staging_area 表模拟 v11 状态
+        conn.executescript(
+            """
+            CREATE TABLE staging_area (
+                id TEXT PRIMARY KEY,
+                real_path TEXT NOT NULL,
+                path_key TEXT NOT NULL UNIQUE,
+                display_name TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO staging_area (id, real_path, path_key, created_at, updated_at)
+            VALUES ('s1', 'D:/Stash', 'd:/stash', 't', 't');
+            """
+        )
+        assert (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='staging_area'"
+            ).fetchone()
+            is not None
+        )
+
+        migrate_v11_to_v12(conn)
+
+        # 表已删除
+        assert (
+            conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='staging_area'"
+            ).fetchone()
+            is None
+        )
+    finally:
+        conn.close()
+
+
+def test_migrate_v11_to_v12_idempotent() -> None:
+    """v11→v12 迁移函数本身幂等（DROP TABLE IF EXISTS）。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        # 不创建 staging_area 表，直接迁移应不报错
+        migrate_v11_to_v12(conn)
+        # 再次调用也不报错
+        migrate_v11_to_v12(conn)
+    finally:
+        conn.close()
+
+
+# --- v12 → v13 迁移测试（UX 重构 Task 6：纯 DELETE 模式） ---
+
+
+def test_migrate_v12_to_v13_deletes_unmarked_and_drops_column() -> None:
+    """v12→v13：清理 is_marked=0 记录及关联，移除 is_marked 列。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        # 手动构建 v12 形态的 content_unit（含 is_marked）+ 关联表
+        conn.executescript(
+            """
+            CREATE TABLE content_unit (
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                path_key TEXT NOT NULL UNIQUE,
+                title TEXT,
+                content_type TEXT NOT NULL DEFAULT 'mod',
+                source_url TEXT,
+                cover_path TEXT,
+                is_marked INTEGER NOT NULL DEFAULT 1 CHECK(is_marked IN (0, 1)),
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE tag (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                category_id TEXT NOT NULL
+            );
+            CREATE TABLE content_unit_tag (
+                content_unit_id TEXT NOT NULL REFERENCES content_unit(id),
+                tag_id TEXT NOT NULL REFERENCES tag(id),
+                PRIMARY KEY (content_unit_id, tag_id)
+            );
+            CREATE TABLE thumbnail_cache (
+                content_unit_id TEXT NOT NULL,
+                size INTEGER NOT NULL DEFAULT 64,
+                source_size_bytes INTEGER NOT NULL,
+                source_modified_at TEXT NOT NULL,
+                cache_filename TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error_message TEXT,
+                generated_at TEXT NOT NULL,
+                PRIMARY KEY (content_unit_id, size)
+            );
+            INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at)
+            VALUES ('marked', '/m', '/m', 1, 't', 't'),
+                   ('unmarked', '/u', '/u', 0, 't', 't');
+            INSERT INTO tag (id, name, category_id) VALUES ('t1', '标签', 'c1');
+            INSERT INTO content_unit_tag (content_unit_id, tag_id)
+            VALUES ('marked', 't1'), ('unmarked', 't1');
+            INSERT INTO thumbnail_cache (content_unit_id, size, source_size_bytes,
+                source_modified_at, cache_filename, status, generated_at)
+            VALUES ('marked', 256, 1, 't', 'marked_256.webp', 'ok', 't'),
+                   ('unmarked', 256, 1, 't', 'unmarked_256.webp', 'ok', 't');
+            """
+        )
+
+        migrate_v12_to_v13(conn)
+
+        # is_marked=0 记录及其关联被清理，is_marked=1 记录保留
+        remaining = conn.execute("SELECT id FROM content_unit ORDER BY id").fetchall()
+        assert [r["id"] for r in remaining] == ["marked"]
+        tag_rows = conn.execute("SELECT content_unit_id FROM content_unit_tag").fetchall()
+        assert [r["content_unit_id"] for r in tag_rows] == ["marked"]
+        thumb_rows = conn.execute("SELECT content_unit_id FROM thumbnail_cache").fetchall()
+        assert [r["content_unit_id"] for r in thumb_rows] == ["marked"]
+
+        # is_marked 列与索引已移除
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(content_unit)")}
+        assert "is_marked" not in cols
+        idx_row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' "
+            "AND name='idx_content_unit_is_marked'"
+        ).fetchone()
+        assert idx_row is None
+    finally:
+        conn.close()
+
+
+def test_migrate_v12_to_v13_idempotent() -> None:
+    """v12→v13 迁移函数本身幂等（列存在性检查）。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        # 已迁移（无 is_marked 列）时再次调用不报错
+        conn.execute(
+            """
+            CREATE TABLE content_unit (
+                id TEXT PRIMARY KEY,
+                path TEXT NOT NULL UNIQUE,
+                path_key TEXT NOT NULL UNIQUE,
+                title TEXT,
+                content_type TEXT NOT NULL DEFAULT 'mod',
+                source_url TEXT,
+                cover_path TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        migrate_v12_to_v13(conn)
+        migrate_v12_to_v13(conn)
+    finally:
+        conn.close()
+
+
+# --- v13 → v14 迁移测试（操作便捷性1：提取内容） ---
+
+
+def _apply_v0_to_v13(conn: sqlite3.Connection) -> None:
+    """辅助：将内存数据库迁移到 v13 状态（通过迁移注册表按序应用）。"""
+    for version, fn in MIGRATIONS:
+        if version <= 13:
+            fn(conn)
+
+
+def test_migrate_v13_to_v14_allows_strip_operation_type() -> None:
+    """v13→v14 迁移后 operation_history 应接受 operation_type='strip'。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        _apply_v0_to_v13(conn)
+        migrate_v13_to_v14(conn)
+
+        # 'strip' 类型应可写入（不违反 CHECK 约束）
+        conn.execute(
+            "INSERT INTO operation_history (id, operation_type, source_path, "
+            "target_path, created_at, can_undo) VALUES "
+            "('h-strip', 'strip', 'D:/flat', 'D:/', '2026-08-04T00:00:00Z', 0)"
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT operation_type FROM operation_history WHERE id = 'h-strip'"
+        ).fetchone()
+        assert row["operation_type"] == "strip"
+    finally:
+        conn.close()
+
+
+def test_migrate_v13_to_v14_preserves_existing_history() -> None:
+    """v13→v14 迁移应保留既有 operation_history 数据。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        _apply_v0_to_v13(conn)
+        conn.execute(
+            "INSERT INTO operation_history (id, operation_type, source_path, "
+            "target_path, created_at, can_undo) VALUES "
+            "('h-old', 'move', 'D:/a.txt', 'D:/b.txt', '2026-08-01T00:00:00Z', 1)"
+        )
+        conn.commit()
+
+        migrate_v13_to_v14(conn)
+
+        row = conn.execute("SELECT * FROM operation_history WHERE id = 'h-old'").fetchone()
+        assert row is not None
+        assert row["operation_type"] == "move"
+        assert row["source_path"] == "D:/a.txt"
+        assert row["target_path"] == "D:/b.txt"
+        assert row["undone_at"] is None
+    finally:
+        conn.close()
+
+
+def test_migrate_v13_to_v14_idempotent() -> None:
+    """v13→v14 迁移函数本身幂等（重复调用不报错，'strip' 约束保持）。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        _apply_v0_to_v13(conn)
+        migrate_v13_to_v14(conn)
+        # 再次调用应跳过（CHECK 约束已含 'strip'）
+        migrate_v13_to_v14(conn)
+
+        conn.execute(
+            "INSERT INTO operation_history (id, operation_type, source_path, "
+            "target_path, created_at, can_undo) VALUES "
+            "('h2', 'strip', 'D:/s', 'D:/', '2026-08-04T00:00:00Z', 0)"
+        )
+        conn.commit()
+        assert (
+            conn.execute("SELECT COUNT(*) FROM operation_history WHERE id = 'h2'").fetchone()[0]
+            == 1
+        )
+    finally:
+        conn.close()
+
+
+def test_migrate_v13_to_v14_skips_when_table_absent() -> None:
+    """operation_history 表不存在时迁移应跳过（不报错）。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        # 不应用任何迁移，operation_history 表不存在
+        migrate_v13_to_v14(conn)
+        row = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='operation_history'"
+        ).fetchone()
+        assert row is None
+    finally:
+        conn.close()
+
+
+def _apply_v0_to_v14(conn: sqlite3.Connection) -> None:
+    """辅助：将内存数据库迁移到 v14 状态（通过迁移注册表按序应用）。"""
+    for version, fn in MIGRATIONS:
+        if version <= 14:
+            fn(conn)
+
+
+def test_migrate_v14_to_v15_drops_title_column_and_preserves_data() -> None:
+    """v14→v15 迁移应删除 content_unit.title 列并保留其余数据。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        _apply_v0_to_v14(conn)
+        conn.execute(
+            "INSERT INTO content_unit (id, path, path_key, title, content_type, "
+            "created_at, updated_at) VALUES "
+            "('cu1', 'D:/a', 'd:/a', '旧标题', 'mod', '2026-08-01T00:00:00Z', "
+            "'2026-08-01T00:00:00Z')"
+        )
+        conn.commit()
+
+        migrate_v14_to_v15(conn)
+
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(content_unit)")}
+        assert "title" not in cols
+        row = conn.execute("SELECT * FROM content_unit WHERE id = 'cu1'").fetchone()
+        assert row is not None
+        assert row["path"] == "D:/a"
+        assert row["content_type"] == "mod"
+    finally:
+        conn.close()
+
+
+def test_migrate_v14_to_v15_backfills_color_hex_and_drops_hue() -> None:
+    """v14→v15 迁移应回填 color_hex（与显示色一致）并删除 color_hue。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        _apply_v0_to_v14(conn)
+        conn.execute(
+            "INSERT INTO tag_category (id, name, color_hue) VALUES "
+            "('tc1', '服装护甲', 210), ('tc2', '武器', 30)"
+        )
+        conn.commit()
+
+        migrate_v14_to_v15(conn)
+
+        tc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tag_category)")}
+        assert "color_hex" in tc_cols
+        assert "color_hue" not in tc_cols
+        row1 = conn.execute("SELECT color_hex FROM tag_category WHERE id = 'tc1'").fetchone()
+        row2 = conn.execute("SELECT color_hex FROM tag_category WHERE id = 'tc2'").fetchone()
+        assert row1["color_hex"] == "#1A78D6"  # hue 210
+        assert row2["color_hex"] == "#D6781A"  # hue 30
+    finally:
+        conn.close()
+
+
+def test_migrate_v14_to_v15_idempotent() -> None:
+    """v14→v15 迁移函数本身幂等（重复调用不报错、列状态不变）。"""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        _apply_v0_to_v14(conn)
+        migrate_v14_to_v15(conn)
+        migrate_v14_to_v15(conn)
+
+        cu_cols = {r["name"] for r in conn.execute("PRAGMA table_info(content_unit)")}
+        tc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tag_category)")}
+        assert "title" not in cu_cols
+        assert "color_hex" in tc_cols
+        assert "color_hue" not in tc_cols
     finally:
         conn.close()

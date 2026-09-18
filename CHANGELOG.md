@@ -4,9 +4,822 @@
 
 在 1.0.0 之前，0.MINOR.PATCH 中的 MINOR 用于标记里程碑推进（roadmap 阶段/Task），PATCH 用于同里程碑内的修复与小幅调整。任何可能影响用户数据或破坏已有功能的变化都会使 MINOR 递增。
 
-## [Unreleased]
+## [0.51.3] - 2026-09-18
 
-尚未发布的改动。开发期间此节用于汇总已完成但未标注版本标签的提交。
+**补充工作流问题记录**：
+  - 记录旧版 `skyrim-mod-workbench` 控制台启动快捷指令的移除计划，以及后续以打包可执行文件启动的方向。
+  - 保留该条目作为阶段 0 入口清理和后续打包工作的验收记录。
+
+## [0.51.2] - 2026-09-18
+
+**提交前版本同步规则**：
+  - 明确每次提交前同步 `CHANGELOG.md`、`README.md` 和 `pyproject.toml` 的版本信息。
+  - 将版本递增规则和收尾检查分别写入 `AGENTS.md` 与 `arlo-verify-finish`。
+
+## [0.51.1] - 2026-09-18
+
+**Arlo 第二次产品方向重构准备（阶段 0 文档与开发流程）**：
+  - 确立产品名为 Arlo，创建新的活动路线图 `docs/roadmap.md`，并明确阶段 0 的项目身份、入口统一和兼容性边界。
+  - 归档第一次交接文档、第一次路线图、第一次 UX 路线图及相关历史评审资料。
+  - 更新 `AGENTS.md`，清理已失效的权威文档引用，补充当前文档优先级、阶段边界、本地化预留和数据兼容规则。
+  - 将项目阶段推进与验证收尾 skill 统一为 `arlo-stage` 和 `arlo-verify-finish`，并修复 skill 元数据编码。
+  - 本版本仅整理文档、开发规则和工具元数据，不改变运行时功能、数据库 schema 或用户文件。
+
+## [0.51.0] - 2026-08-05
+
+**Schema v15：删除 content_unit.title + tag_category 存储完整颜色（2026-08-05）**：
+  - schema v14 → v15 合并迁移（两个独立 schema 升级 issue，2026-08-03 记录；
+    原 v14 迁移窗口已被操作便捷性1 的 'strip' 占用）：
+    - 删除 `content_unit.title` 列——UI合理性14 起已停止读写、无用户语义
+      （遗留别名已清，剩余均为 title == 文件名 默认值）；同步移除
+      `scripts/clear_legacy_titles.py` 及其测试
+    - `tag_category.color_hue` → `color_hex`（完整 #RRGGBB，大写）：迁移回填
+      用与显示完全一致的换算（纯 Python HSL→RGB，360 色相与 QColor.fromHsl
+      对照 0 偏差），升级后所有分类颜色观感不变；为未来恢复全功能选色
+      （自定义 RGB / 十六进制输入）铺路
+  - 领域模型 / 仓储 / TagService（create_category / update_category_color）/
+    全部 UI 着色调用（tag_colors、标签管理、元数据面板、批量打标签、筛选栏）
+    切换 color_hex；选中/排除三态变体从存储色取色相按原 S/L 重建
+  - 标签 JSON 导入导出升级 schema v2（color_hex），导入兼容旧 v1
+    （color_hue 自动换算）；预置标签库 default_tags.json 升级 v2
+  - 选色 UI 维持 24 色预选表（用户确认 2026-08-05：只做存储升级）
+  （[migrations.py](src/infrastructure/migrations.py) /
+  [color_utils.py](src/infrastructure/color_utils.py) /
+  [models.py](src/domain/models.py) /
+  [tag_service.py](src/application/tag_service.py) /
+  [tag_colors.py](src/app/tag_colors.py) /
+  [color_picker_dialog.py](src/app/color_picker_dialog.py) /
+  [test_migrations.py](tests/test_migrations.py)）
+
+## [0.50.22] - 2026-08-04
+
+**设置文件化 + 数据目录收紧（2026-08-04，用户反馈）**：
+  - 应用设置从 Windows 注册表改为文件形式 settings.ini（位于应用数据目录内）：
+    统一走 `get_app_settings()`，覆盖全部设置（缩放/布局/内容单元标记/图标颜色/
+    网址搜索/归档/快捷键/右键开关等），不再写注册表
+  - 数据目录解析收紧：删除 %LOCALAPPDATA% 与用户主目录回退，应用数据
+    （app.db / thumbnails / logs / exports / settings.ini）始终位于程序所在位置内
+    （项目 data/ 或打包后程序旁 data/）
+  （[app_paths.py](src/app/app_paths.py) / [main_window.py](src/app/main_window.py) /
+  [content_list_controller.py](src/app/content_list_controller.py) /
+  [operation_history_dialog.py](src/app/operation_history_dialog.py)）
+
+## [0.50.21] - 2026-08-04
+
+**右键功能开关 + 快捷键配置面板（设计合理性1，2026-08-04）**：
+  - 新增「工具 → 设置…」统一对话框（原「视图 → 快捷键设置…」占位移除），
+    含「右键功能」「快捷键」两个页签
+  - 右键功能开关（QSettings 键 `context_menu/*`）：全部 26 项右键功能按 5 组
+    （内容单元/网络与搜索/归档/文件操作/视图与其他）逐项勾选，默认全开；
+    关闭后对应菜单项（含「移动到最近目录」「添加最近标签」子菜单）立即消失
+  - 快捷键自定义（QSettings 键 `shortcut/*`）：12 项快捷键可改键/清空（=禁用）/
+    恢复默认；中栏、目录树、文件夹预览共用同一条配置，保存后立即重注册生效；
+    重复按键允许但高亮警告（含冲突项 tooltip）
+  - 验收调整：快速设置封面右键功能整条链路删除（菜单项/控制器/服务方法/测试）；
+    「添加到钉住文件夹」归入「视图与其他」组、「提取内容」归入「文件操作」组
+  - 验收修复：最近使用标签按钮与预选/chip 一致按分类着色（背景/边框分类色、
+    文字按亮度黑/白）
+
+## [0.50.20] - 2026-08-04
+
+**归档功能（功能增加1，2026-08-04）**：
+  - 标记任意文件夹为归档根目录（中栏/目录树右键，QSettings 持久化 `archive/root_path`，
+    先支持一个）；标记时立即清除根内（含子项）内容单元标记（标签/备注/封面随之清除，
+    不动文件）；目录树归档根显示「〔归档〕」标记
+  - 归档入口（中栏 + 目录树）：「快速归档」Ctrl+W 移到上次归档位置（无记录时打开
+    归档选择）；「归档到…」打开以归档根为根目录树的移动选择（默认选中归档根）；
+    复用现有移动到全流程（冲突处理 / operation_history / 撤销），移动后删除内容单元
+    标记（撤销只移回文件、不恢复标记）；归档目标与「最近移动目标」分开记忆，
+    快速归档与 Ctrl+Q 快速移动互不干扰
+  - 扫描跳过归档根：根内（含子目录）压缩包不再成为内容单元候选，目录树保持完整
+  - 生成归档内容清单：归档根内任意文件夹右键生成该子目录直接子项清单
+    （文件夹在前、名称排序、UTF-8，输出 `{目录名}归档内容.txt` 到上级目录；
+    逻辑迁自参考脚本 `src/archive_selector.py`，原脚本已删除）
+  - 同位置移动（目标 = 源路径）自动跳过、不再弹「覆盖/跳过/重命名」对话框
+    （共享冲突扫描逻辑，快速移动/快速归档/复制粘贴一并生效）
+
+## [0.50.19] - 2026-08-04
+
+**文件类型 SVG 图标 + 列表图标尺寸调节（UI合理性4 / UI合理性19，2026-08-04）**：
+  - 文件类型图标（列表 / 卡片占位 / 文件夹预览共用）：文件夹、压缩包、图片、
+    其他文档四类 SVG 图标，加载失败回退 Qt 标准图标
+    （[file_type_icons.py](src/app/file_type_icons.py) /
+    [file_list_model.py](src/app/file_list_model.py)）
+  - 图标库：**game-icon-pack**（作者 Nieobie，CC0-1.0）
+    - 库原址：https://github.com/Nieobie/game-icon-pack
+    - 许可：https://github.com/Nieobie/game-icon-pack#CC0-1.0-1-ov-file
+    - 本地归档：`assets/third-party/game-icon-pack-v1.4-svg-zh/`（v1.4-svg-zh，
+      取「无间距」变体 9-媒体 四枚；运行时副本 `src/app/resources/icons/` ASCII 短名）
+  - 图标按类型着色：文件夹 #f6e03b / 压缩包 #72e9a1 / 图片 #8ab8e6 /
+    其他文档 #ffffff；默认值在 `ui_constants.FILE_TYPE_ICON_COLORS`，
+    并新增「视图 → 文件类型图标颜色…」自定义对话框（QColorDialog + 恢复默认，
+    QSettings 持久化 `icon_color/*`，确定后立即生效并重绘三处列表）
+    （[file_type_icon_colors.py](src/app/file_type_icon_colors.py) /
+    [file_type_icon_colors_dialog.py](src/app/file_type_icon_colors_dialog.py)）
+  - 顶部菜单新增「帮助 → 开源资产致谢…」对话框，展示图标库来源/作者/许可
+    （[asset_credits_dialog.py](src/app/asset_credits_dialog.py) /
+    [main_menu_bar.py](src/app/main_menu_bar.py)）
+  - 列表视图图标尺寸六档（16/20/24/28/32/36，默认 16），行高 = 图标 + 8px
+    内边距，用于减小信息密度；缩放下拉框随视图切换档位（列表六档 / 卡片六档，
+    各自独立记忆与持久化 `view/list_icon_size` / `view/card_icon_size`）
+  - 缩放下拉框套用 BugFix3 方案（`PressSelectComboBox` 按下即选中），
+    列表/卡片视图快速滑动点一次即生效、显示与实际缩放一致
+    （[view_state_controller.py](src/app/view_state_controller.py) /
+    [ui_constants.py](src/app/ui_constants.py)）
+
+## [0.50.18] - 2026-08-04
+
+**MainWindow 第二轮拆分（TD-M21 / TD-M31 独立重构，2026-08-04）**：
+  - 继续拆分 `main_window.py`（原 3710 行 / 167 方法 / 91 实例变量 →
+    **1985 行 / 174 方法 / 76 实例变量**，纯重构、无行为变化）
+  - 新增 12 个模块：`content_views`（两个列表视图类）、`navigation_controller`
+    （导航历史）、`view_state_controller`（视图切换/缩放/排序）、`search_controller`、
+    `tree_roots_controller`（目录树/根目录）、`context_menu_builder`（右键菜单）、
+    `file_operations_controller`（新建/重命名/删除/粘贴/移动到/撤销）、
+    `content_list_controller`（中栏刷新/选中联动/筛选/条目级动作）、
+    `metadata_helpers`（元数据文本 + Elide）、`entry_dialogs`（重命名/创建 Mod 组对话框）、
+    `shortcut_registry`（快捷键注册）、`scan_ui_state`（扫描按钮/状态栏/刷新联动）
+  - `_setup_ui` 拆为 `_build_top_bar` / `_build_left_panel` / `_build_middle_panel` /
+    `_build_right_panel` 子方法
+  - MainWindow 保留窗口装配、薄委托、测试接口与少量窗口级 handler；
+    全部 247 个 main_window 测试与全量 1449 个测试保持通过
+  - 测试隔离修复：conftest autouse fixture 每个测试前后清理默认 QSettings 的
+    `recent_move_targets` / `recent_tags` 键，根治既有用例把最近移动目标写入
+    真实注册表导致的跨用例/跨进程污染
+    （[main_window.py](src/app/main_window.py) / [navigation_controller.py](src/app/navigation_controller.py) /
+    [view_state_controller.py](src/app/view_state_controller.py) / [search_controller.py](src/app/search_controller.py) /
+    [tree_roots_controller.py](src/app/tree_roots_controller.py) / [context_menu_builder.py](src/app/context_menu_builder.py) /
+    [file_operations_controller.py](src/app/file_operations_controller.py) / [content_list_controller.py](src/app/content_list_controller.py) /
+    [metadata_helpers.py](src/app/metadata_helpers.py) / [entry_dialogs.py](src/app/entry_dialogs.py) /
+    [shortcut_registry.py](src/app/shortcut_registry.py) / [scan_ui_state.py](src/app/scan_ui_state.py) /
+    [content_views.py](src/app/content_views.py)）
+
+## [0.50.17] - 2026-08-04
+
+**提取内容（剥离）+ Mod 组元数据继承（操作便捷性1 / 操作合理性5，2026-08-04）**：
+  - 新增「提取内容」：中栏右键普通文件夹（未标记内容单元）→ 确认后把文件夹内
+    顶层条目提取到上级目录，清空后文件夹移入回收站；冲突复用现有解决对话框
+    （重命名/跳过/覆盖）；汇总写一条 `strip` 操作历史（不可撤销，与 copy/delete 一致）
+  - 新增 `StripService`（应用层）：前置校验（仅普通文件夹/非空）+ 冲突扫描 +
+    子项逐个 move（自动同步 folder_cache / ContentUnit.path）+ 空文件夹回收站删除
+  - schema v14：`operation_history.operation_type` CHECK 约束扩展 `'strip'`（幂等迁移）
+  - 创建 Mod 组继承元数据：来源 URL / 备注取显示顺序第一个非空、标签取并集，
+    在源文件移动前快照（move 会改写 ContentUnit.path）、新文件夹标记后应用；
+    成功提示追加「（已继承来源/备注/标签）」
+  - 中文路径、部分失败（子项失败不中断、文件夹未清空则不删除）、空文件夹拒绝均覆盖
+  （[strip_service.py](src/application/strip_service.py) /
+  [content_unit_creation_service.py](src/application/content_unit_creation_service.py) /
+  [context_menu_builder.py](src/app/context_menu_builder.py) /
+  [file_operations_controller.py](src/app/file_operations_controller.py) /
+  [migrations.py](src/infrastructure/migrations.py) /
+  [test_strip_service.py](tests/test_strip_service.py) /
+  [test_main_window_strip.py](tests/test_main_window_strip.py)）
+
+## [0.50.16] - 2026-08-04
+
+**N 网网址 + 快速浏览器搜索（操作便捷性8 / 操作便捷性9，2026-08-04）**：
+  - 新增共享模块 `nexus_filename`：`extract_nexus_id`（N 网尾号）、
+    `build_nexus_url`（文件自身名 / 文件夹内部最小 ID——汉化后发 → 最小者即本体）、
+    `mod_search_query`（与创建 Mod 组同名提取 + `_`/`-`→空格）；
+    `extract_mod_name` 迁入该模块（content_unit_creation_service re-export，消除重复）
+  - 右键菜单（中栏单选内容单元）：「自动填入网址」「打开网址」——
+    打开网址在来源 URL 为空时先尝试自动填入，仍为空则静默；格式检查严格匹配
+    N 网模式，不匹配时**不填、不报错、不弹窗**（绝无"前缀+空值"）；
+    扫描与启动不自动填入
+  - 右键菜单（中栏单选条目）：「浏览器搜索」——前缀（默认 `skyrim `）+
+    有效文件名（去尾号），拼到搜索引擎（默认 Bing）
+  - 「视图 → 网址与搜索设置…」：N 网前缀 / 搜索引擎 / 搜索前缀可配置
+    （QSettings 键 `url/*`，带恢复默认）
+  （[nexus_filename.py](src/application/nexus_filename.py) /
+  [url_settings.py](src/app/url_settings.py) /
+  [content_list_controller.py](src/app/content_list_controller.py) /
+  [context_menu_builder.py](src/app/context_menu_builder.py) /
+  [test_nexus_filename.py](tests/test_nexus_filename.py) /
+  [test_main_window_url_actions.py](tests/test_main_window_url_actions.py)）
+
+## [0.50.15] - 2026-08-04
+
+**输入控件右键菜单中文化（验收反馈，2026-08-04）**：
+  - Qt 内置输入框右键菜单为英文（复制/粘贴/剪切/全选），与项目全中文 UI 约定不符；
+    新增应用级事件过滤器 `ChineseInputContextMenuFilter`，拦截 QLineEdit /
+    QTextEdit / QPlainTextEdit 的 ContextMenu 事件弹出中文菜单（复制/剪切/粘贴/全选，
+    按控件状态与剪贴板内容启用/禁用）
+  - 接入 main.py（QApplication 安装事件过滤器），无需逐个控件改造
+  （[chinese_input_menu.py](src/app/chinese_input_menu.py) /
+  [test_chinese_input_menu.py](tests/test_chinese_input_menu.py)）
+
+## [0.50.14] - 2026-08-04
+
+**双击打开 + 文件夹预览快捷键 + 中栏拖拽高亮（操作合理性1 / 操作便捷性10 /
+操作便捷性2 调整，2026-08-04）**：
+  - 双击文件（内容单元/普通文件）→ 系统默认程序打开（压缩包/图片快速预览）；
+    双击文件夹进入目录不变；双击/右键「打开」共用同一逻辑（操作合理性1）
+  - 文件夹预览快捷键：面板列表聚焦时 Ctrl+C/X/V、Delete、Ctrl+M、Ctrl+Q
+    （复用右键同一分发）；Ctrl+P（窗口级）钉住/取消钉住文件夹预览（操作便捷性10）
+  - 中栏内部拖拽目标高亮：拖到同视图文件夹行 = 移动，悬停文件夹行自绘高亮、
+    不改变选中（操作便捷性2 调整版）；拖拽到目录树方案**回退**——Qt 原生
+    跨视图拖拽重绘异常（内容轮流消失、高亮不可靠），issue 已记录暂缓
+  - 字体切换功能**回退删除**（UI合理性20）：QFontDialog 为 Qt 自带英文界面，
+    自由选字体易可读性差，用户确认删除，回到系统字体
+  （[content_list_controller.py](src/app/content_list_controller.py) /
+  [content_views.py](src/app/content_views.py) /
+  [assembly_panel.py](src/app/assembly_panel.py) /
+  [shortcut_registry.py](src/app/shortcut_registry.py) /
+  [test_content_views_drop_highlight.py](tests/test_content_views_drop_highlight.py)）
+
+## [0.50.13] - 2026-08-04
+
+**排序下拉框修复（BugFix3，2026-08-04）**：
+  - 修复"点击排序项要点两次 / 快速滑动时排序与下拉框显示不一致"：新增
+    `PressSelectComboBox`——监听弹窗视图 `pressed` 信号鼠标按下即选中，
+    release 的 activated 去重（键盘路径保留），release 覆盖 currentIndex 时
+    恢复"按下即选中"项；按下即排序后控制器立即同步下拉框显示
+  - 排序下拉框内置升降序项（升序 ▲ / 降序 ▼，资源管理器式）：方向项保持当前
+    字段仅切方向，选择后显示恢复为字段项；移除独立 ▲/▼ 按钮
+    （方向仍由列表列头 ▲/▼ 指示）
+  （[sort_combo_box.py](src/app/sort_combo_box.py) /
+  [view_state_controller.py](src/app/view_state_controller.py) /
+  [main_window.py](src/app/main_window.py) /
+  [file_list_model.py](src/app/file_list_model.py) /
+  [ui_constants.py](src/app/ui_constants.py) /
+  [test_sort_combo_box.py](tests/test_sort_combo_box.py) /
+  [test_main_window_view_switch.py](tests/test_main_window_view_switch.py)）
+
+## [0.50.12] - 2026-08-04
+
+**内容单元标记可配置（UI合理性21）**：
+  - 新增 `ContentUnitMarkerConfig`（QSettings 键 `marker/*`）：行首徽章字符/开关、
+    色条颜色/开关；`reserved_width` 按启用组合自动派生
+    （仅色条 5 / 仅图标 18 / 双启用 23）；"至少启用一个"校验
+  - 新增 `ContentUnitMarkerDialog`（顶部菜单「视图 → 内容单元标记设置…」）：
+    字符输入（单个 Unicode 字符校验）、色条 QColorDialog（完整 hex）、恢复默认、
+    确定后立即生效；验收反馈：字符/颜色在对应标记未启用时也可预填编辑
+  - `ContentUnitStripeDelegate` 改配置驱动：徽章位图缓存按字符键控，
+    色条/徽章/预留宽度全部走配置；MainWindow 仅接线
+  - 默认配置：只启用紫色色条（#B39DDB），🔗 预填但不启用
+  （[content_unit_marker_config.py](src/app/content_unit_marker_config.py) /
+  [content_unit_marker_dialog.py](src/app/content_unit_marker_dialog.py) /
+  [content_unit_delegate.py](src/app/content_unit_delegate.py) /
+  [main_menu_bar.py](src/app/main_menu_bar.py) / [main_window.py](src/app/main_window.py)）
+
+## [0.50.11] - 2026-08-04
+
+**内容单元标记改版：行首 🔗 徽章 + 左侧色条（UI合理性13）**：
+  - 名称前 `--` 文本标记改为**行首位图徽章**：🔗 不再拼进 DisplayRole 文本
+    （emoji 字体回退抬高行高度量——实测 "armor" 15.23px vs "🔗 armor" 15.98px，
+    垂直居中导致文字下移约 1px），改为名称列 delegate 在预留区绘制缓存位图
+  - 新增左侧淡紫色色条（3px，`#B39DDB`）辅助区分；所有行内容统一右移
+    预留宽度（色条+徽章+间距），有/无标记行的图标与文字对齐
+  - 拆离：色条/徽章绘制抽为 `ContentUnitStripeDelegate`（名称列专用，
+    含可测试的几何/颜色纯函数），MainWindow 仅一行接线
+  - 已知瑕疵（用户确认不修）：默认 19px 行高下 16px 图标底部偶发 1px 裁切
+  （[content_unit_delegate.py](src/app/content_unit_delegate.py) /
+  [file_list_model.py](src/app/file_list_model.py) /
+  [ui_constants.py](src/app/ui_constants.py) / [main_window.py](src/app/main_window.py)）
+
+## [0.50.10] - 2026-08-04
+
+**列表封面区分/筛选 + 导航记忆 + 标签反选（UI合理性5 / 操作便捷性5 / 操作便捷性7 / UI合理性16）**：
+  - UI合理性5：文件夹类内容单元有封面 → 列表视图复用现有 256 封面缓存缩放到 64×64
+    作为图标（只读查询，不产生新缓存、无圆角）；无缓存回退标准文件夹图标
+  - 操作便捷性5：「只看有封面」切换按钮（中栏标题栏，按下筛选、不持久化），
+    与标签筛选 AND 组合
+  - 操作便捷性7：双击进入目录后，后退/前进恢复该目录最后一次选中（含多选，
+    按路径匹配并滚动到首个恢复行）
+  - UI合理性16：标签筛选三态（未选 → 已选 ✓加粗+白色描边 → 已排除 −删除线+降饱和，
+    第三次取消）；三态样式统一 2px 边框 + 预留加粗宽度消除跳动（去 ✓/− 文字前缀）；
+    反选标签进入排除筛选（正选 AND 结果中剔除，可多个反选并存）；
+    分类徽标改为「分类名 N」并预留两位数字宽度
+  - 拆离：内容筛选组合逻辑抽为 `ContentFilter.filter_entries`（纯函数）；
+    选中记忆抽为 `SelectionMemory`（记录/按路径恢复/滚动）；
+    封面图标缩放下移 `ThumbnailCoordinator.get_cover_icon`；MainWindow 仅接线
+  （[file_list_model.py](src/app/file_list_model.py) /
+  [thumbnail_coordinator.py](src/app/thumbnail_coordinator.py) /
+  [main_window.py](src/app/main_window.py) /
+  [tag_filter.py](src/app/tag_filter.py) /
+  [tag_colors.py](src/app/tag_colors.py) /
+  [content_filter.py](src/app/content_filter.py) /
+  [selection_memory.py](src/app/selection_memory.py)）
+
+## [0.50.9] - 2026-08-03
+
+**分类颜色统一 + 批量打标签重构（BugFix2 / UI合理性12）**：
+  - BugFix2：新增共享颜色 helper `tag_colors`（hue → QColor / 样式表 hex / 色块图标），
+    选色改为**预选色表**（24 色相块，点击即选，所见即所得）替换 QColorDialog——
+    修复"快速颜色与实际颜色不一致"根因（原仅存 hue + 固定 S/L 重建）；
+    分类色接入标签管理树、元数据面板预选标签/chip、标签筛选栏、批量打标签
+    （背景/边框统一分类色，文字色按相对亮度自动黑/白，暗色模式友好）
+  - UI合理性12：批量打标签重构——预选标签按分类分组（组头可折叠）+ 搜索过滤框
+    （输入即过滤）；chip 区改 FlowLayout 按钮；删除「（未添加标签）」空提示；
+    删除独立标签输入框（仅保留搜索框）
+  - 验收反馈：分类组头不着色（避免颜色杂乱）；标签按钮背景/边框统一分类色 +
+    自动黑/白文字色；标签管理对话框关闭后元数据面板即时刷新当前单元标签
+    （`refresh_tags` 不触碰表单字段，保留未保存的来源/备注编辑）
+  - 文件列表四列改 Interactive 固定默认宽度（320/60/80/150，Explorer 风格右侧留白
+    供框选），滚动条出现/消失不再导致列横移跳动；修复末行下方空白区起框（从下往上
+    拉）选不中（操作合理性4）
+  - 修复分割线固化：Windows 注册表字符串列表兼容（原校验只接受 int 导致恢复回退
+    默认）+ 拖动分隔线实时保存（closeEvent 兜底）
+  - 中栏文件列表四列宽度接入固化：保存/恢复 + 拖动即保存（layout/header/file_list），
+    「重置布局」实时恢复默认宽度
+  （[tag_colors.py](src/app/tag_colors.py) /
+  [color_picker_dialog.py](src/app/color_picker_dialog.py) /
+  [batch_tag_dialog.py](src/app/batch_tag_dialog.py) /
+  [metadata_panel.py](src/app/metadata_panel.py) /
+  [tag_filter.py](src/app/tag_filter.py) /
+  [tag_manager_dialog.py](src/app/tag_manager_dialog.py)）
+
+## [0.50.8] - 2026-08-03
+
+**分割线状态持久化/重置 + 顶部菜单栏（UI合理性2/3）**：
+  - 分割线（主三栏 / 右栏 / 操作历史列宽）保存/恢复/重置抽成独立 helper
+    `SplitterStateHelper`（QSettings 持久化，键 `layout/*`），MainWindow 仅接线，
+    首次 showEvent 恢复（避免窗口未布局时 setSizes 被零宽缩放清零）
+  - 顶部菜单栏抽成独立 view `MainMenuBar`（「视图」：列表/卡片切换、重置布局、
+    快捷键设置占位；「工具」：标签管理/操作历史），MainWindow 只连接信号
+  - 默认比例：主栏 220/480/324（中栏加宽）；文件列表名称列 Stretch、
+    类型/大小/修改日期默认 60/80/150；操作历史列 Interactive 可拖动 +
+    默认 180/340/90 并持久化
+  - 「重置布局」恢复默认并清除操作历史列宽存档（模态对话框下次打开生效）
+  （[splitter_state.py](src/app/splitter_state.py) /
+  [main_menu_bar.py](src/app/main_menu_bar.py) /
+  [main_window.py](src/app/main_window.py) /
+  [operation_history_dialog.py](src/app/operation_history_dialog.py) /
+  [ui_constants.py](src/app/ui_constants.py)）
+
+**移除未使用的 contain 缩略图渲染模式（清理）**：生成器与应用侧不再支持
+  `mode="contain"`（宽高比缩放 + 透明填充 + 圆角）——该模式自卡片缩略图缓存
+  接入（UI合理性17）起已无任何调用方与测试依赖；`generate_thumbnail` /
+  `ThumbnailService.generate` 统一为方形居中裁剪，删除圆角/透明填充辅助代码
+  与对应测试
+  （[thumbnail_generator.py](src/infrastructure/thumbnail_generator.py) /
+  [thumbnail_service.py](src/application/thumbnail_service.py) /
+  [test_thumbnail_generator.py](tests/test_thumbnail_generator.py)）
+
+## [0.50.7] - 2026-08-03
+
+**元数据面板图片直接预览（操作合理性2）**：中栏单选图片文件时，
+  右栏元数据面板直接显示原图预览（无缓存、不写数据库，复用封面预览的
+  原图加载路径）：
+  - 未标记图片文件 → 面板切换为「图片预览」视图（标题/文件名/路径 + 原图，
+    隐藏编辑表单）；损坏/不支持图片显示占位边框，不崩溃
+  - 已标记图片文件单元无封面 → 封面预览区直接显示文件本身；手动设置封面后
+    封面优先（行为不变）
+  - 图片识别复用 `ContentService.is_image_file`（扩展名集合与封面候选一致，
+    未新增重复列表）
+  - 布局：面板底部 stretch 吸收剩余空间，元素（含图片预览）自动靠顶，消除
+    元素间空行；已有标签区默认高度恢复为常量值 240，并在其下方新增鼠标
+    拖动条（60~240 可调、内部滚动，`_PresetScrollArea` 可变 sizeHint，
+    空间不足时仍可压缩到下限）
+  （[metadata_panel.py](src/app/metadata_panel.py) /
+  [metadata_view.py](src/app/metadata_view.py) /
+  [main_window.py](src/app/main_window.py) /
+  [content_service.py](src/application/content_service.py)）
+
+## [0.50.6] - 2026-08-03
+
+**title 停用 + 重命名栏（UI合理性14）**：保留 content_unit.title 列但停止使用，
+  UI 去掉标题输入框，创建/搜索/重命名不再读写 title；原标题栏改为「重命名」栏位
+  （显示真实文件名，回车直接重命名，不走元数据「保存」按钮）：
+  - MetadataPanel 重命名栏回车 → `rename_requested` 信号 → MainWindow 执行
+    FileOperationService.rename（复用冲突/非法名处理、operation_history、
+    目录树/中栏刷新）；重命名成功后不重载表单（未保存的来源/备注编辑保留）
+  - 创建（标记/扫描/Mod 组）不再写 title；`update_metadata` 移除 title 参数；
+    重命名/移动不再维护 title
+  - 搜索改为按真实文件名（basename）匹配，优先级 名称 > 标签 > 备注；
+    搜索结果列「标题」→「名称」（[models.py](src/domain/models.py) /
+    [search.py](src/infrastructure/repositories/search.py) /
+    [metadata_panel.py](src/app/metadata_panel.py) /
+    [main_window.py](src/app/main_window.py)）
+  - 遗留别名清除：新增 [clear_legacy_titles.py](scripts/clear_legacy_titles.py)
+    （默认 dry-run、幂等，`UPDATE title = NULL WHERE title != 文件名`），
+    真实库 4 条遗留别名已清除
+  - schema 不动（CURRENT_SCHEMA_VERSION 仍 13）；删除 title 列的 schema 升级
+    另立 issue（待数据导出/导入机制就绪）
+
+## [0.50.5] - 2026-08-03
+
+**内容单元标记前置缩写（UI合理性13）**：列表视图标记由名称后的 ` [内容单元]` 改为
+  名称前的 `--`（双短横线，验收反馈逐次调整），长文件名截断时标记不再被遮挡；
+  卡片视图保持 Q6:B 决策不变（名称不含标记，ToolTip 承载状态）
+  （[ui_constants.py](src/app/ui_constants.py) / [file_list_model.py](src/app/file_list_model.py)）
+
+**卡片视图启用 256px 缩略图缓存（UI合理性17）**：恢复 ThumbnailCoordinator
+  生成链路到卡片视图（Stage 5 Task 1b 曾改为直接加载原图，多内容下全尺寸解码
+  导致卡顿）：
+  - 生成器新增 `mode="cover"` 方形居中裁剪模式（生成器默认 contain 不变），
+    缩略图生成服务（ThumbnailService.generate）默认使用 cover，
+    与卡片 Task 2 验收视觉（方形居中裁剪、无圆角/透明条）一致
+    （[thumbnail_generator.py](src/infrastructure/thumbnail_generator.py)）
+  - CardListModel 恢复缩略图 provider：缓存命中同步返回、未命中显示固定尺寸
+    占位图标（icon_size × icon_size，占地与缩略图一致，避免首次批量生成缓存时
+    布局抖动），后台生成完成后按行刷新（[card_list_model.py](src/app/card_list_model.py)）
+  - MainWindow 恢复 `_card_thumbnail_provider` 接线（256 档），缓存失效/GC 复用
+    既有 Service 链路（[main_window.py](src/app/main_window.py)）
+
+## [0.50.4] - 2026-08-03
+
+全量 pytest 原生崩溃修复（测试稳定性1）。
+
+**修复**
+
+- **MetadataPanel 清理按钮时先断开信号，消除 deleteLater 引用环原生崩溃（测试稳定性1）**：
+  chip / 预设 / 最近标签按钮的 clicked/toggled lambda 闭包引用面板，deleteLater 后面板
+  包装器回收时，事件循环处理 DeferredDelete 会在按钮析构途中触发面板二次删除
+  （PySide6 6.11.1 + Python 3.14，Windows access violation / Abort；全量 pytest 在
+  `test_thumbnail_coordinator.py` 处原生崩溃）。新增 `_disconnect_button_signals` /
+  `_disconnect_flow_buttons`，全部清理路径（`_remove_tag_chip` / `clear_panel` /
+  `_load_tags_for_unit` / `_refresh_recent_list` / `_clear_preset_groups`）先断开再
+  deleteLater（[metadata_panel.py](src/app/metadata_panel.py)）
+- **TagFilterBar rebuild 同类防御**：分类/标签按钮重建删除前先断开 clicked 连接
+  （[tag_filter.py](src/app/tag_filter.py)）
+
+**测试**：新增 2 个回归测试（旧 chip 信号已断开 + DeferredDelete 处理不崩溃）；
+全量 pytest 恢复稳定通过；ruff check + format 全绿。
+
+## [0.50.3] - 2026-08-03
+
+封面设置即时保存（操作便捷性6）。
+
+- **封面选择/清除即时落库**：元数据面板「设置封面」对话框点「确定」后立即调用
+  `ContentService.update_metadata` 写入 `cover_path` 并提交事务，不再等待「保存」
+  按钮；「清除封面」同样立即清空（[metadata_view.py](src/app/metadata_view.py) /
+  [metadata_panel.py](src/app/metadata_panel.py)）
+- 封面保存不重载元数据表单：未保存的标题/来源/备注编辑保留，等「保存」按钮统一提交；
+  保存按钮语义不变（仅负责标题/来源/备注，封面已即时保存）
+- 新增 `cover_saved` 信号链路：面板 → MetadataView → MainWindow 刷新中栏
+  （封面图标/缩略图变化）+ 状态栏「封面已保存」（[main_window.py](src/app/main_window.py)）
+
+**测试**：面板层覆盖立即落库/提交回调/信号/清除/未保存编辑保留/失败路径，
+MainWindow 层覆盖对话框确定后数据库已更新；ruff check + format 全绿。
+
+## [0.50.2] - 2026-08-02
+
+UI 术语调整（UI合理性1）。
+
+- **装配面板更名为「文件夹预览」**：面板语义已是"文件夹内容透视"（绑定当前/
+  钉住文件夹 → 显示内容 → 双击进入 / 右键操作 / 拖入添加），"装配面板"与实际
+  功能不符。仅改显示名（[ui_constants.py](src/app/ui_constants.py)），代码标识符
+  （Assembly*/assembly_*）保留 legacy 命名，待 UX 重构 Task 8 统一改名
+  （登记于 TD-L30）。
+
+## [0.50.1] - 2026-08-02
+
+数据一致性与移动流程修复（数据库问题1 / BugFix1 / Bug紧急修复2）。
+
+**修复**
+
+- **重命名/移动后的数据库残留（数据库问题1）**：
+  - 文件重命名/移动不再产生重复内容单元：`FileOperationService` 文件分支原地
+    更新 content_unit 行（path/path_key + 默认标题跟随，用户自定义标题保留）；
+    目标位于已标记文件夹内时按 spec §5.4 取消该文件标记（删除行）
+  - 扫描时清理当前 root 下文件已不存在的 content_unit 行（级联
+    content_unit_tag / thumbnail_cache；root 本身不存在时跳过，防误删）——
+    既有脏库在下次扫描后自愈
+  - 新增 `ContentUnitRepository.get_by_path_key`（归一化路径查询）
+- **批量移动报"移动失败"但内容实际已移动（Bug紧急修复2）**：
+  - 根因：`FolderCacheSyncHelper.on_folder_moved` 只删单行，移动带子目录缓存的
+    目录时触发 FOREIGN KEY constraint failed，DB 回滚后旧路径 content_unit 行
+    被扫描清理误删（丢失内容单元标记）
+  - 修复：`on_folder_moved` 改为整棵子树迁移（新路径行父先子后插入、前缀重写、
+    父链重建；旧行先子后父删除），目录树移动后即时反映完整子树
+- **Ctrl+Q 目录树不刷新（BugFix1）**：Ctrl+Q 改为目录树聚焦时移动树选中节点
+  （新增 `_tree_selected_path`，与 Ctrl+M 树版本对称），否则移动中栏选中；
+  移动后统一刷新目录树
+
+**测试**：相关测试 207 项通过（数据库问题1 回归 / 扫描 / 文件操作 / folder_cache
+同步 / 移动到与快捷键等 9 个测试文件）；ruff check + format 全绿。
+（按用户要求本轮仅跑相关子集，未跑全量。）
+
+## [0.50.0] - 2026-08-02
+
+标签系统体验优化 + 元数据/装配面板样式修复（UI合理性8 / UI合理性7 / 操作便捷性4）。
+
+**新增功能**
+
+- **预选标签按分类分组 + 可折叠（UI合理性8 + UI合理性7）**：元数据面板预选区域
+  按 TagCategory 垂直分组（分组标题按钮可折叠，默认展开，组内按名称排序）；
+  组内标签为 FlowLayout 按钮流（新增 [flow_layout.py](src/app/flow_layout.py)，
+  基于 Qt 官方示例），替代 QListWidget 流式平铺——分组头与标签不再混排，
+  空列表不再出现无法交互的矩形；最近使用区域无记录时整体隐藏
+- **最近使用标签（UI合理性8）**：新增 [recent_tags.py](src/app/recent_tags.py)，
+  记录最近 10 个成功添加的标签（QSettings 持久化）；元数据面板「最近使用」区域
+  点击直接添加；右键内容单元 → 「添加最近标签 ▸」子菜单，点击立即 attach + 提交
+- **标签即时保存（操作便捷性4）**：chip 添加/移除、预选点击、最近标签点击立即
+  attach/detach + 提交（TransactionScope.commit）；「保存」按钮仅负责
+  标题/来源/备注/封面（推翻 2026-07-19 决策 1 的标签部分，用户确认 2026-08-02）
+- **元数据面板布局与样式修复（UI合理性8 验收反馈）**：
+  - 高度参数提取为 ui_constants 常量（METADATA_PANEL_TAG_LIST_HEIGHT /
+    METADATA_PANEL_PRESET_SCROLL_HEIGHT / METADATA_PANEL_NOTES_EDIT_HEIGHT，
+    可手动调整）；chip 区改为单行、释放垂直空间
+  - 删除「无标签」提示（_tags_empty_hint）
+  - 预设标签区高度策略修复：改为「Expanding + 上限常量」并移除面板底部 stretch，
+    使 PRESET_SCROLL_HEIGHT 真正生效；小窗口下自动压缩到 60px，
+    来源 URL / 备注不再被遮挡
+  - chip 区由 QListWidget 改为 FlowLayout 按钮（与「最近使用/已有标签」按钮同款
+    浅灰描边），修复 QListWidget 流式模式下的标签偏移/裁切与无边框问题
+  - 区域样式统一：chip / 最近使用 / 已有标签背景统一为系统 palette Base 深灰
+    （与左栏目录树内部矩形一致）+ 4px 圆角（PANEL_REGION_STYLE_TEMPLATE，
+    同色边框使圆角生效、视觉无边框线）
+  - 装配面板改为与左栏目录树同构的三层结构：1px 浅色外边框 → 窗体底色 →
+    内部灰色圆角列表矩形
+
+**测试**：1313 passed, 4 skipped（新增 RecentTags / 分组折叠 / 最近标签 /
+即时保存持久化 / 右键子菜单等 14 项；原保存期标签失败测试改写为即时路径）；
+ruff check + format 全绿。
+
+## [0.49.0] - 2026-08-02
+
+工作流便捷性优化（实际工作流测试反馈第一批）：最近移动目标 + 3 项小修。
+
+**新增功能**
+
+- **最近移动目标（操作便捷性3，方案1）**：
+  - 新增 [recent_move_targets.py](src/app/recent_move_targets.py)：记录最近 5 个成功
+    移动目标（QSettings 持久化，make_path_key 去重置顶）
+  - 右键菜单「移动到...」后新增「移动到最近目录 ▸」子菜单（简化路径显示，点击直接移动）
+  - Ctrl+Q 快捷键：中栏选中条目 → 直接移动到最近目标（默认快捷键暂定，后续自定义快捷键菜单开放配置）
+  - MoveToDialog 顶部「最近目标」快捷按钮 + 打开时默认展开/选中最近目标（替代源父目录定位）
+- **删除确认提示文件数（操作合理性3）**：删除文件夹时确认文案追加
+  「（文件夹内含 N 个文件）」；空目录删除更安心
+
+**修复 / 优化**
+
+- UI合理性6：重命名弹窗宽度约为默认的 3/2
+- UI合理性5：列表大小列按 B / KB / MB / GB / TB 自动缩写（排序仍按原始字节值）
+
+**测试**：1299 passed, 4 skipped（新增 RecentMoveTargets / MoveToDialog 最近目标 /
+Ctrl+Q / 右键子菜单 / 大小列格式化 / 删除文件数提示等 16 项）；ruff check + format 全绿。
+
+## [0.48.1] - 2026-08-02
+
+紧急修复：标签管理菜单无法打开（`AttributeError: 'MainWindow' object has no attribute '_commit_callback'`）。
+
+- **原因**：UX 重构 Task 7 Commit 1 将 `_commit` / `_rollback` 回调迁入
+  `TransactionScope` 时，遗漏了 `_on_tag_manager_clicked` 对 `TagManagerDialog`
+  的 commit / rollback 回调注入，仍引用已移除的 `self._commit_callback` / `self._rollback_callback`。
+- **修复**：`TagManagerDialog` 构造改为注入 `self._transaction_scope.commit` /
+  `self._transaction_scope.rollback`（`main_window.py`），事务边界统一走 TransactionScope。
+- **测试**：全量 1283 passed, 4 skipped；ruff check + format 全绿。
+
+## [0.48.0] - 2026-08-01
+
+UX 重构 Phase 2 Task 7：MainWindow 拆分（Commit 1 控制器拆分 + Commit 2 技术债与 FileListView 统一）。
+
+**Commit 1：控制器拆分**
+
+- 新增 [transaction_scope.py](src/app/transaction_scope.py)：`_commit` / `_rollback` /
+  `_handle_service_error` 事务逻辑封装（TD-M31），MainWindow 委托调用
+- 新增 [scan_controller.py](src/app/scan_controller.py)：扫描线程生命周期 + TD-H4/H5
+  sender 竞态校验迁入；TD-M13 进度信号接线（scan_progress → 状态栏）；新增
+  [test_scan_controller.py](tests/test_scan_controller.py)（TD-M26 起点）
+- 新增 [assembly_controller.py](src/app/assembly_controller.py)：装配面板绑定 / 钉住 /
+  跟随中栏 / 受影响刷新逻辑迁出
+- 新增 [metadata_view.py](src/app/metadata_view.py)：元数据加载 / 保存提交 / 封面选择
+  编排迁出（面板信号改由视图接管）
+- MainWindow 保留薄委托与文件操作编排，行为不变
+
+**Commit 2：技术债 + FileListView 统一**
+
+- TD-H10：`FileOperationService` 从 `infrastructure/` 迁移到 `application/`
+  （消除 infrastructure → application 反向依赖）
+- TD-L25：`FolderCacheSyncHelper` 新增 `delete_folder_subtree(path)` 语义化方法，
+  `_sync_on_delete` 不再访问私有 `_repo`
+- TD-M35：`rename` 跨盘统一抛 `CrossDriveError`（与 `move` 一致）
+- TD-M36：移除 `AssemblyListModel`，装配面板复用 `FileListModel(single_column=True)`
+
+**测试**：1283 passed, 4 skipped（新增 test_scan_controller.py；装配面板 model 测试
+改用 FileListModel 单列模式），ruff check + format 全绿。
+
+## [0.47.0] - 2026-08-01
+
+UX 重构 Phase 2 Task 6：数据库与死代码清理（回归纯 DELETE 模式）。schema_version v12 → v13。
+
+**新增功能**
+
+- **纯 DELETE 模式落地**：content_unit 移除 `is_marked` 字段（schema v13 迁移：
+  清理历史 is_marked=0 记录及级联关联 → 重建表移除列与索引）。标记 = 记录存在，
+  取消标记 = 删除记录（`ContentService.unmark_content_unit` 改为 DELETE，
+  级联清理 content_unit_tag / thumbnail_cache 记录）。Domain / Repository /
+  Search / Scan / FileOperation 全链路移除 `is_marked`
+- **移除受管理根目录同步清理扫描记录**（open-questions §6）：
+  `ManagedRootService.remove_root` 注入 FolderCacheRepository / ContentUnitRepository
+  + UnitOfWork，清理被移除根路径前缀下的 folder_cache（按深度降序）与 content_unit
+  （级联 tag / thumbnail）；重叠守卫：仍属于其他剩余根目录的记录不清理
+- **旧目录检测代码移除**（open-questions §7）：`app_paths` 删除
+  `_log_legacy_appdata_hint_if_exists` 及对应测试；`%LOCALAPPDATA%` 路径回退保留
+- **移除受管理根目录确认文案更新**：说明会清理该目录下的扫描记录（目录树缓存与
+  内容单元元数据），并明确不删除磁盘文件
+
+**修复 / 清理**
+
+- TD-L31：删除 ui_constants 无人引用的缩略图死常量（THUMBNAIL_SIZE / FORMAT / FILENAME_TEMPLATE）
+- TD-L32：删除 AssemblyService.remove_file 死方法及对应测试
+- TD-L33：清理"浏览/整理模式"过时注释（main_window / search_dialog / tag_filter /
+  metadata_panel / folder_tree_model / assembly_service / domain.models）
+
+**测试**
+
+- 新增：migrations v12→v13（清理 + 列移除 + 幂等）、remove_root 清理（深层/重叠守卫）、
+  unmark 删除记录与级联、search 无过滤条件、remark 新语义
+- 移除：is_marked 相关用例（domain 校验 / search 过滤 / 旧目录提示 4 项 /
+  remove_file 3 项等）
+- 全量回归：1279 tests passed, 4 skipped，ruff check + format 全通过
+
+---
+
+## [0.46.0] - 2026-08-01
+
+UX 重构 Phase 2 Task 5：交互细节优化 + 验收修复
+
+统一右键菜单规范、抑制 QMessageBox 系统提示音、修复撤销循环 bug、操作历史显示优化、刷新按钮与 F5、状态栏统一、路径简化显示、空状态提示。基于验收反馈修复 6 项问题：系统提示音抑制、中栏右键粘贴、copy 操作文案、撤销循环、路径简化应用到全场景、相对路径包含根目录名。schema_version 维持 v12，无数据库迁移。
+
+**新增功能**
+
+- **右键菜单统一**：新增「打开」（Q1=B，已标记内容单元也支持打开）、「钉住此文件夹」「取消钉住」（Q2=C，中栏/目录树/装配面板均支持）；中栏右键文件/文件夹新增「粘贴」项（粘贴到当前中栏目录，剪贴板空时灰显）
+- **QMessageBox 系统提示音抑制**：新增 [message_box_helper.py](src/app/message_box_helper.py)，patch QMessageBox 静态方法使用 `setIcon(NoIcon)` + `setIconPixmap` 抑制 Windows 系统提示音，保留视觉图标；MainWindow.__init__ 调用一次（Q3=C + Q7=A）
+- **刷新按钮与 F5**：中栏标题栏新增刷新按钮 + F5 快捷键（Q5=B + Q6=A），仅刷新当前目录和目录树对应节点，不触发全量扫描，同步刷新装配面板
+- **状态栏统一**：使用 Qt 标准 QStatusBar（Q7=A），移除左侧扫描状态 QGroupBox，消除布局抖动
+- **路径简化显示**：新增 [path_display.py](src/app/path_display.py)（Q8=B），左栏目录详情、右栏元数据面板、操作历史 Tooltip 均应用简化路径；相对路径**包含根目录名**（验收修正：`D:\testPath\A\B\C` → `A\B\C`），外部路径加 `[外部]` 前缀
+- **空状态提示**（Q9=A）：搜索无结果 → "没有找到匹配内容"；目录为空 → "该目录为空"
+- [ui_constants.py](src/app/ui_constants.py) 新增文案：MENU_OPEN / MENU_PIN_FOLDER / MENU_UNPIN_FOLDER / REFRESH_BUTTON / HISTORY_DESC_COPY / HISTORY_OP_LABELS 等
+
+**修复**
+
+- **撤销循环 bug 修复**（Q4=B）：FileOperationService.move/rename 新增 `record_history: bool = True` 参数；UndoService._undo_rename/_undo_move 调用时传 `record_history=False`，避免撤销时产生新的可撤销记录导致无限循环
+- **操作历史显示优化**（Q3=C + Q10=B）：移除描述列改用 Tooltip；过滤已撤销记录；删除操作灰色显示但保留可追溯性；操作类型中文化（HISTORY_OP_LABELS 映射）；新增 copy 分支文案（原显示"未知操作：copy"）
+- **中栏右键粘贴**：原仅空白区域右键支持粘贴，现文件/文件夹右键也支持（粘贴到当前中栏目录）
+- **路径简化全场景应用**：原仅操作历史 Tooltip 应用简化路径，现左栏目录详情、右栏元数据面板均应用
+- **相对路径包含根目录名**：原规则不含根目录名（`A\B\C` → `B\C`），验收修正为含根目录名（`A\B\C`）
+
+**设计要点**
+
+- **QMessageBox 提示音抑制**：通过 `setIcon(QMessageBox.Icon.NoIcon)` 避免 Windows MessageBeep 触发，`setIconPixmap` 手动设置图标 pixmap 保留视觉图标；patch 应用在 MainWindow.__init__，幂等
+- **撤销循环修复策略**：采用 `record_history=False` 参数方案而非删除新记录，保持 FileOperationService 的同步逻辑（folder_cache + ContentUnit.path）完整执行，仅跳过 operation_history 写入
+- **路径简化规则**：使用 PurePath 跨平台比较，匹配最长根目录（处理嵌套根目录）；路径就是根目录本身时返回根目录名；外部路径加 `[外部]` 前缀保留可追溯性
+- **MetadataPanel 路径简化注入**：MetadataPanel 新增 `set_managed_root_service` 方法，MainWindow 创建面板后注入
+
+**测试**
+
+- 新增 [test_path_display.py](tests/test_path_display.py)：路径简化 8 个测试用例（含根目录名、外部路径、嵌套根目录、多根目录、中文路径、空路径、根目录本身、service 封装）
+- 新增右键菜单粘贴、钉住/取消钉住相关测试用例
+- 全量回归：1288 tests passed, 4 skipped，ruff check + format 全通过
+
+---
+
+## [0.45.0] - 2026-08-01
+
+UX 重构 Phase 1 Task 4：「添加到钉住文件夹」+ 基础拖拽（快速插入移除）+ 验收修复
+
+移除「快速插入」功能及其服务，由「添加到钉住文件夹」菜单项和中栏/装配面板拖拽替代。装配面板作为 drop target 仅在钉住状态下接受文件/文件夹拖入。同步落地 3 项基于验收反馈的修复：钉住文件夹内操作后装配面板同步刷新、重命名后中栏内容消失的系统性修复、程序启动时多个小窗口闪过。schema_version 维持 v12，无数据库迁移。
+
+**移除功能**
+
+- **快速插入服务**：[quick_insert_service.py](src/application/quick_insert_service.py) 删除，[test_quick_insert_service.py](tests/test_quick_insert_service.py) 删除
+- [main.py](src/app/main.py) / [application/__init__.py](src/application/__init__.py) 移除 `QuickInsertService` 导入与实例化
+- [main_window.py](src/app/main_window.py) 移除 `quick_insert_service` 注入与相关调用
+
+**新增功能**
+
+- **「添加到钉住文件夹」菜单项**：中栏右键文件/文件夹 → 「添加到钉住文件夹」（仅装配面板钉住时可见）→ 复用 `_perform_move_to` 移动到钉住文件夹，统一冲突解决流程
+- **装配面板 drop target**：[assembly_panel.py](src/app/assembly_panel.py) 实现 `dragEnterEvent`/`dragMoveEvent`/`dropEvent`，仅钉住状态下接受文件/文件夹拖入（与右键添加行为一致），通过 `on_drop_files` 回调委托 MainWindow
+- **中栏内拖拽**：[file_list_model.py](src/app/file_list_model.py) / [card_list_model.py](src/app/card_list_model.py) 实现 `mimeData` 返回含本地文件 URL 的 `QMimeData`，支持拖出到装配面板或资源管理器
+- **拖拽到文件夹**：中栏内拖拽文件到同目录的文件夹 = 「移入该文件夹」（`_on_drop_to_folder`），含自子目录检测与冲突解决
+- **`_perform_move_to` 扩展**：新增 `refresh_assembly` 参数，拖入装配面板时无条件刷新装配面板；拖入中栏被钉住文件夹时通过 `_refresh_assembly_if_affected` 同步刷新
+- [ui_constants.py](src/app/ui_constants.py) 新增文案：MENU_ADD_TO_PINNED / ASSEMBLY_DROP_NOT_PINNED 等
+
+**修复（基于验收反馈）**
+
+- **修复 1：钉住文件夹内操作后装配面板同步刷新**：新增 `_refresh_assembly_if_affected(*affected_dirs)` 辅助方法，在重命名/删除/新建文件夹/粘贴/移动等文件操作后检查受影响目录是否与装配面板钉住文件夹匹配，匹配则调用 `refresh_current`。覆盖「双击进入被钉住文件夹后进行任何操作」场景，含 5 个测试用例（rename/delete/new_folder/paste/move_to）
+- **修复 2：重命名后中栏内容消失（系统性修复）**：新增 `_restore_middle_after_tree_refresh(dir_path)` 方法统一处理 `_refresh_tree` 后的中栏恢复。`_refresh_tree` 会清空 `content_list_model` 且 `restore_expanded_paths` 恢复选中节点不触发 `selectionChanged` 信号，导致中栏空白。新方法通过 `find_index_by_path` 恢复目录树选中 + 直接调用 `_refresh_content_list` 刷新中栏（不依赖信号），替代原 `_refresh_content_list_after_file_op` 在重命名路径的调用
+- **修复 3：程序启动时多个小窗口闪过**：所有容器组件（`QWidget`/`QSplitter`）创建时显式传入 `self` 作为父对象，避免短暂成为顶级窗口
+
+**设计要点**
+
+- **拖拽范围控制**：装配面板仅在钉住时接受 drop（A4 决策），避免误操作；中栏内拖拽接受文件和文件夹（与右键添加行为一致）
+- **冲突解决复用**：「添加到钉住文件夹」/拖拽到装配面板/拖拽到文件夹均复用 `_perform_move_to` + `ConflictResolutionDialog`，统一重命名/跳过/覆盖询问
+- **自子目录检测**：拖拽到文件夹时拒绝「拖入自身」和「父目录拖入子目录」（`SelfSubdirectoryError`）
+- **装配面板同步刷新触发点**：所有文件操作（重命名/删除/新建/粘贴/移动）在操作完成后调用 `_refresh_assembly_if_affected`，比较 `make_path_key` 归一化路径，避免大小写/分隔符差异
+
+**测试**
+
+- 新增 Task 4 测试用例：添加到钉住文件夹（单文件/多文件/冲突对话框/覆盖/中文文件名）、装配面板拖拽（拒绝未钉住/接受文件/接受文件夹/混合/冲突/移动文件/移动文件夹）、中栏拖拽到文件夹（内部/冲突/自子目录拒绝/父到子拒绝）、拖到钉住文件夹后刷新装配面板、FileListModel/CardListModel mimeData
+- 新增修复 1 测试用例 5 个：钉住文件夹内 rename/delete/new_folder/paste/move_to 后装配面板同步刷新
+- 全量回归：1279 tests passed, 4 skipped（Windows 权限相关），ruff check + format 全通过
+
+---
+
+## [0.44.0] - 2026-07-31
+
+UX 重构 Phase 1 Task 3：装配面板 📌 钉住功能
+
+为装配面板添加 📌 钉住/取消钉住切换能力。钉住后中栏的选中/导航操作不再改变装配面板绑定，方便用户固定当前透视的文件夹进行持续整理。取消钉住后立即跟随中栏当前选中。钉住对象路径不存在时自动解除钉住并清空面板。schema_version 维持 v12，无数据库迁移。
+
+**新增功能**
+
+- **📌 钉住按钮**：[assembly_panel.py](src/app/assembly_panel.py) 标题栏右侧新增 📌 按钮（B3 决策：钉住时切换图标 📌 → 📍）
+- **钉住状态短路**：`bind_mod_group`/`bind_folder` 在钉住状态下短路不切换绑定（A1/A2 决策）
+- **取消钉住跟随中栏**：[main_window.py](src/app/main_window.py) `_on_assembly_pin_changed(False)` → `_follow_middle_selection_after_unpin` 立即跟随中栏当前选中（B4 决策）
+- **创建 Mod 组不自动绑定**（B1）：钉住状态下 `_on_create_mod_group` 不调用 `_bind_assembly_panel`
+- **路径不存在自动解除**（A4/B6）：`refresh_current` 检测钉住对象路径不存在时调用 `force_unpin_and_clear`
+- **移动整个透视文件夹后强制解除**（A4）：`_on_assembly_file_op` 的 move_to 分支检测文件夹移动后调用 `force_unpin_and_clear`
+- [ui_constants.py](src/app/ui_constants.py) 新增文案：ASSEMBLY_PIN_BUTTON_UNPINNED/PINNED、ASSEMBLY_PIN_TOOLTIP_UNPINNED/PINNED
+
+**设计要点**
+
+- **钉住状态不持久化**（A3）：程序重启后清空钉住状态，与现有装配面板绑定行为一致
+- **未绑定时 📌 按钮禁用**（A5）：`bind_mod_group`/`bind_folder` 解绑时 `_pin_button.setEnabled(False)`
+- **钉住状态下文件操作仍可用**（B2）：钉住仅阻止 bind_* 切换，不影响 refresh_current 和 on_file_op 回调
+- **回调委托模式**：`AssemblyPanel` 通过 `on_pin_changed(pinned: bool)` 回调通知 MainWindow，MainWindow 在取消钉住时主动调用 `_follow_middle_selection_after_unpin` 跟随中栏
+- **force_unpin_and_clear vs unpin**：`unpin()` 仅清除钉住标志保留当前绑定内容（用户主动取消钉住，由 MainWindow 跟随中栏）；`force_unpin_and_clear()` 同时清空绑定（路径不存在或移动自身等异常情况）
+
+**测试**
+
+- 新增 11 个 Task 3 钉住功能测试用例：A5 未绑定禁用 / 绑定后启用 / A1 单击不切换 / A2 双击不切换 / B4 跟随中栏 / B4 无选中清空 / A3 不持久化 / B2 文件操作可用 / A4/B6 路径不存在自动解除 / A4 移动自身解除 / B3 按钮图标切换
+- 全量回归：1262 tests passed, 4 skipped（Windows 权限相关），ruff check + format 全通过
+
+---
+
+## [0.43.0] - 2026-07-31
+
+UX 重构 Phase 1 Task 2：装配面板迁移到右栏 + 文件操作继承
+
+装配面板从中间区分割区域迁移到右栏下方（与元数据面板上下分布，可拖拽调整比例），并扩展为"文件夹透视器"语义：单击任意文件夹内容单元即可绑定装配面板透视其内部文件，不限于已标记内容单元。装配面板右键菜单完整继承中栏文件操作（重命名/复制/剪切/粘贴/移动到/删除/复制路径），图片额外支持「重命名为文件夹名」，空白处支持「移动到...」整体迁移透视文件夹。schema_version 维持 v12，无数据库迁移。
+
+**新增功能**
+
+- **布局重构**：[main_window.py](src/app/main_window.py) 移除中栏 `_middle_splitter`，新建右栏 `_right_splitter`（元数据上 + 装配下，初始比例 3:2），装配面板固定在右栏下方
+- **单击绑定（A1-1）**：单击文件夹内容单元 → 装配面板绑定；单击其他 → 解绑；双击文件夹 → 进入目录（与现有行为一致）
+- **装配面板透视器语义**：扩展为可透视任意文件夹（不限于内容单元），新增 `AssemblyService.list_folder_files(path)` + `AssemblyPanel.bind_folder(path)` + `MainWindow._bind_assembly_folder`
+- **关闭按钮移除（B1-1）**：装配面板固定在右栏，`_close_button` / `_on_close_clicked` / `on_panel_closed` 回调 / `_on_assembly_closed` 一并清理
+- **「加入装配」菜单项移除（B2-2）**：`_on_assembly_add_file` / `MENU_ADD_TO_ASSEMBLY` / `ASSEMBLY_ADD_FILE_OK/FAILED` 清理，Task 4 由「添加到钉住文件夹」替代
+- **装配面板右键菜单继承中栏操作**：重命名/复制/剪切/粘贴/移动到/删除/复制路径（通过 `on_file_op(action, entries)` 回调委托 MainWindow 复用现有逻辑）
+- **图片右键「重命名为文件夹名」**：新增 `AssemblyService.rename_as_cover_by_path(folder_path, image_path)`，支持非内容单元文件夹
+- **空白处右键「移动到...」**：移动整个透视文件夹，移动成功后解绑装配面板（A3-1）
+- **空白处右键「粘贴」**：粘贴到当前透视文件夹（修复 3）
+- [ui_constants.py](src/app/ui_constants.py) 新增文案：ASSEMBLY_MENU_MOVE_FOLDER
+
+**修复（基于验收反馈）**
+
+- **修复 1：装配面板重命名不再误入文件夹**：抽取 `_rename_entry_core(entry, refresh_middle)` 核心方法，装配面板调用时 `refresh_middle=False`，避免中栏被刷新到文件父目录（错误进入文件夹）。中栏调用仍保持 `refresh_middle=True`
+- **修复 2：重命名弹窗初始选区忽略后缀**：新增自定义 `_show_rename_dialog` 替换原 `QInputDialog.getText`，通过 `Path.suffix` 计算选区长度，初始选中文件名部分（不含扩展名）。`preview.jpg` 只选中 `preview`，避免误改后缀。`.gitignore` 等以点开头的文件 suffix 为整个名称时全选
+- **修复 3：装配面板空白处支持粘贴**：`_show_empty_area_menu` 新增「粘贴」菜单项，粘贴到当前透视文件夹
+
+**设计要点**
+
+- **装配面板语义扩展**：从"仅 Mod 组内容单元"扩展为"任意文件夹透视器"，单击非内容单元文件夹也能透视其内部文件，封面重命名功能通过 `rename_as_cover_by_path` 支持任意文件夹
+- **信号循环防护**：`_bind_assembly_panel` → `bind_mod_group` → `_refresh_file_list` 仅刷新装配面板内部 model，不反向修改 content_view 选区
+- **文件操作委托**：装配面板通过 `on_file_op(action, entries)` 回调委托 MainWindow，复用中栏现有文件操作逻辑（重命名/复制/剪切/粘贴/移动到/删除/复制路径），避免逻辑重复
+- **重命名对话框选区**：QInputDialog.getText 不支持设置初始选区，改用自定义 QDialog + QLineEdit.setSelection 实现忽略后缀的选区
+- **重命名刷新策略**：通过 `refresh_middle` 参数控制是否刷新中栏，装配面板重命名只刷新装配面板自身（`refresh_current`），中栏重命名保持原有刷新父目录行为
+
+**测试**
+
+- 新增 `AssemblyService.list_folder_files` 单元测试 5 个用例：列出文件 / 子目录 / 排序 / 非目录返回空 / 不存在路径返回空
+- 新增 `AssemblyService.rename_as_cover_by_path` 单元测试 5 个用例：按文件夹名重命名 / 多图后缀 / 非图片异常 / 路径不在文件夹内 / 已重命名幂等
+- 新增装配面板文件操作集成测试 8 个用例：装配面板在右栏 splitter / 单击文件夹绑定 / 单击非内容单元文件夹透视 / 非内容单元文件夹图片重命名 / 文件操作（delete/copy_path/copy+paste）
+- 适配重命名对话框变更：`test_main_window_file_ops_task3a.py` / `test_main_window_shortcuts.py` 重命名测试从 mock `QInputDialog.getText` 改为 mock `MainWindow._show_rename_dialog`
+- 全量回归：1252 tests passed, 4 skipped（Windows 权限相关），ruff check + format 全通过
+
+---
+
+## [0.42.0] - 2026-07-31
+
+UX 重构 Phase 1 Task 1：移除双模式切换
+
+从双模式工作区（浏览/整理）收敛为单面板 + 可钉住装配面板的统一工作区。删除顶部模式切换按钮、暂存区功能及相关数据库表，"创建 Mod 组"从整理模式独有变为统一面板中栏右键通用功能。schema_version v11 → v12 迁移（删除 staging_area 表）。本次为 Workspace 架构重构的奠基版本，后续 Task 2-7 在此基础上展开。
+
+**移除功能（破坏性变更）**
+
+- **模式切换**：删除 [mode_manager.py](src/app/mode_manager.py) / `AppMode` 枚举 / 顶部 [浏览|整理] 切换按钮 / 整理模式状态变量，删除 `MainWindow._on_mode_changed` / `_apply_mode` / `_refresh_for_mode` 等模式相关方法
+- **暂存区功能**：删除 `StagingArea` 实体 / `StagingService` / `StagingAreaRepository` / `staging_area` 表，删除目录树右键"标记为暂存区"/"取消暂存区标记"功能
+  - [staging_service.py](src/application/staging_service.py) 删除
+  - [staging_area.py](src/infrastructure/repositories/staging_area.py) 删除
+  - [db.py](src/infrastructure/db.py) `CURRENT_SCHEMA_VERSION` 11 → 12
+  - [migrations.py](src/infrastructure/migrations.py) 新增 `migrate_v11_to_v12`：DROP TABLE staging_area
+  - [folder_tree_service.py](src/application/folder_tree_service.py) 移除暂存区标记查询，目录树不再显示 `[S]` 标记
+  - [errors.py](src/application/errors.py) 删除 `StagingAreaNotFoundError` / `StagingAreaAlreadyExistsError`
+- **快速插入按钮**：保持隐藏（C2 决策），Task 4 正式移除 `QuickInsertService`
+- **死代码清理**：`ContentService.list_staging_entries` / `MainWindow._refresh_staging_content_list` 已删除
+
+**新增功能**
+
+- **多选创建 Mod 组**：`ContentUnitCreationService.create_content_unit_from_files` 批量接口（D1 调整：原 D1「逐个调用 + 容错」因文件夹已存在 ConflictError 不可行，改为一次建文件夹 + 逐个移入 + 容错汇总）
+- **装配面板始终可见**：未绑定时显示空状态占位「无固定内容」（原 Task 2 的部分行为提前）
+- 装配面板「移除文件」功能已在 Commit 3 移除（L2 提前，原计划 Task 4），UI/回调/常量一并清理
+
+**设计要点**
+
+- **数据模型原则**：标记 = 数据库有记录，取消标记 = DELETE 记录。不引入 `status` 列或 `is_marked` 字段表达"曾经标记过"语义。schema v11 遗留的 `is_marked` 字段在 Task 6 中一并清理
+- **Mod 组 = 文件夹内容单元**：不引入 `ModGroup` 实体，"创建 Mod 组"是 UI 操作（建文件夹 + 移入文件 + 标记为内容单元）
+- **多选创建 Mod 组容错**：`create_content_unit_from_files` 一次建文件夹 + 逐个移入 + 容错汇总，避免逐个调用 + 容错时因文件夹已存在 ConflictError 不可行的问题
+
+**测试**
+
+- 删除 `test_mode_manager.py` / `test_main_window_mode.py` / `test_main_window_quick_insert.py` / `test_main_window_staging_list.py` / `test_staging_service.py` / `test_staging_area_repository.py` / `test_content_service.py`（暂存区相关测试）
+- 适配 `test_main_window_assembly.py` / `test_main_window_context_menu_task3.py` / `test_main_window_metadata.py` / `test_main_window_tag_filter.py` / `test_main_window_view_switch.py`：移除模式相关测试用例
+- 新增 `test_migrations.py` v11→v12 迁移测试
+- 新增多选创建 Mod 组测试
 
 ---
 

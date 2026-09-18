@@ -8,7 +8,8 @@ spec §10.3：标签管理对话框，提供：
 交互方式（用户确认 B1-B4）：
 - QTreeWidget 树形展示（分类为顶级节点，标签为子节点）。
 - 工具栏按钮触发操作；双击分类/标签进入重命名编辑模式。
-- color_hue 通过「改颜色」按钮弹出颜色选择子对话框（QSlider + 色块预览）。
+- 分类颜色通过「改颜色」按钮弹出预选色表子对话框（schema v15 起存储完整
+  #RRGGBB 颜色，而非色相）。
 - 增删改立即提交数据库（无"应用"按钮）。
 
 事务边界（用户确认 F6）：
@@ -29,9 +30,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
-    QColorDialog,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -46,6 +45,8 @@ from PySide6.QtWidgets import (
 )
 
 from app import ui_constants as ui
+from app.color_picker_dialog import ColorPickerDialog
+from app.tag_colors import color_icon
 from application.errors import (
     ApplicationError,
     DuplicateTagCategoryNameError,
@@ -204,12 +205,11 @@ class TagManagerDialog(QDialog):
 
     def _make_category_item(self, cat: TagCategory) -> QTreeWidgetItem:
         item = QTreeWidgetItem()
-        item.setText(0, f"{cat.name}（H={cat.color_hue}）")
+        item.setText(0, cat.name)
         item.setData(0, _ROLE_CATEGORY, cat)
         item.setData(0, _ROLE_IS_CATEGORY, True)
-        # 色块图标
-        pixmap_color = QColor.fromHsl(cat.color_hue, 200, 120)
-        item.setIcon(0, _color_icon(pixmap_color))
+        # 色块图标（共享 helper，保证各界面颜色一致）
+        item.setIcon(0, color_icon(cat.color_hex))
         return item
 
     def _make_tag_item(self, tag: Tag) -> QTreeWidgetItem:
@@ -257,12 +257,12 @@ class TagManagerDialog(QDialog):
         if not name.strip():
             self._show_error(ui.TAG_MANAGER_EMPTY_NAME_TITLE, ui.TAG_MANAGER_EMPTY_NAME_TEXT)
             return
-        # 让用户选颜色（默认 210 蓝色）
-        color_hue = self._ask_color_hue(default=210)
-        if color_hue is None:
+        # 让用户选颜色（默认 #1A78D6，原 210 蓝色）
+        color_hex = self._ask_color_hex(default="#1A78D6")
+        if color_hex is None:
             return
         try:
-            self._service.create_category(name, color_hue=color_hue)
+            self._service.create_category(name, color_hex=color_hex)
             self._commit()
             self._refresh_tree()
         except (DuplicateTagCategoryNameError, InvalidTagJsonError) as e:
@@ -304,11 +304,11 @@ class TagManagerDialog(QDialog):
         if cat is None:
             self._show_info(ui.TAG_MANAGER_NO_CATEGORY_SELECTED)
             return
-        new_hue = self._ask_color_hue(default=cat.color_hue)
-        if new_hue is None:
+        new_hex = self._ask_color_hex(default=cat.color_hex)
+        if new_hex is None:
             return
         try:
-            self._service.update_category_color(cat.id, new_hue)
+            self._service.update_category_color(cat.id, new_hex)
             self._commit()
             self._refresh_tree()
         except (TagCategoryNotFoundError, ApplicationError) as e:
@@ -549,19 +549,16 @@ class TagManagerDialog(QDialog):
 
     # --- 辅助对话框 ---
 
-    def _ask_color_hue(self, default: int = 210) -> int | None:
-        """弹出颜色选择对话框，返回 color_hue（0-360）。取消返回 None。"""
-        # 先用 QColorDialog 预览
-        initial = QColor.fromHsl(default, 200, 120)
-        color = QColorDialog.getColor(
-            initial,
-            self,
-            ui.TAG_COLOR_DIALOG_TITLE,
-            QColorDialog.ColorDialogOption.ShowAlphaChannel,
-        )
-        if not color.isValid():
+    def _ask_color_hex(self, default: str = "#1A78D6") -> str | None:
+        """弹出预选色表对话框（BugFix2：所见即所得），返回完整颜色（#RRGGBB）。
+
+        取消返回 None。所选颜色与存储/显示完全一致，
+        不再使用 QColorDialog 的 RGB 快速色板（原"快速颜色与实际颜色不一致"根因）。
+        """
+        dialog = ColorPickerDialog(initial_hex=default, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
-        return color.hslHue() % 360
+        return dialog.selected_hex()
 
     def _ask_target_category(
         self, categories: list[TagCategory], exclude_id: str | None = None
@@ -595,10 +592,3 @@ class TagManagerDialog(QDialog):
 
     def _show_info(self, text: str) -> None:
         QMessageBox.information(self, ui.TAG_OP_OK, text)
-
-
-def _color_icon(color: QColor) -> QPixmap:
-    """生成 16x16 色块图标。"""
-    pixmap = QPixmap(16, 16)
-    pixmap.fill(color)
-    return pixmap

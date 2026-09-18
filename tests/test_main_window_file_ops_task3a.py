@@ -8,7 +8,8 @@
 - _show_empty_area_context_menu：空白区域右键新建文件夹
 - 未注入 FileOperationService 时菜单项不显示
 
-对话框通过 monkeypatch QInputDialog.getText / QMessageBox.question 模拟。
+对话框通过 monkeypatch QInputDialog.getText（新建文件夹）/
+MainWindow._show_rename_dialog（重命名）/ QMessageBox.question 模拟。
 """
 
 from __future__ import annotations
@@ -26,12 +27,12 @@ from PySide6.QtWidgets import QInputDialog, QMessageBox  # noqa: E402
 from app import ui_constants as ui  # noqa: E402
 from app.main_window import MainWindow  # noqa: E402
 from application.content_service import ContentService  # noqa: E402
+from application.file_operation_service import FileOperationService  # noqa: E402
 from application.folder_tree_service import FolderTreeService  # noqa: E402
 from application.managed_root_service import ManagedRootService  # noqa: E402
 from application.scan_service import ScanService  # noqa: E402
 from domain.models import FileEntry  # noqa: E402
 from infrastructure.db import get_connection, init_db  # noqa: E402
-from infrastructure.file_operation_service import FileOperationService  # noqa: E402
 from infrastructure.folder_cache_sync_helper import FolderCacheSyncHelper  # noqa: E402
 from infrastructure.repositories.content_unit import ContentUnitRepository  # noqa: E402
 from infrastructure.repositories.folder_cache import FolderCacheRepository  # noqa: E402
@@ -70,6 +71,8 @@ def file_ops_env(qapp, tmp_path: Path):
 
     managed_service = ManagedRootService(
         ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
         now_provider=lambda: "2026-07-30T00:00:00Z",
         uuid_provider=fake_uuid,
     )
@@ -126,6 +129,8 @@ def no_file_ops_env(qapp, tmp_path: Path):
 
     managed_service = ManagedRootService(
         ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
         now_provider=lambda: "2026-07-30T00:00:00Z",
         uuid_provider=fake_uuid,
     )
@@ -404,7 +409,7 @@ class TestRename:
         qapp.processEvents()
         entry = _select_entry(qapp, window, "preview.jpg")
 
-        monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("renamed.jpg", True))
+        monkeypatch.setattr(window, "_show_rename_dialog", lambda old_name: ("renamed.jpg", True))
 
         window._on_rename_entry(entry)  # noqa: SLF001
         qapp.processEvents()
@@ -427,7 +432,7 @@ class TestRename:
         qapp.processEvents()
         entry = _select_entry(qapp, window, "preview.jpg")
 
-        monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("", False))
+        monkeypatch.setattr(window, "_show_rename_dialog", lambda old_name: ("", False))
 
         window._on_rename_entry(entry)  # noqa: SLF001
         qapp.processEvents()
@@ -442,7 +447,7 @@ class TestRename:
         qapp.processEvents()
         entry = _select_entry(qapp, window, "preview.jpg")
 
-        monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("preview.jpg", True))
+        monkeypatch.setattr(window, "_show_rename_dialog", lambda old_name: ("preview.jpg", True))
 
         window._on_rename_entry(entry)  # noqa: SLF001
         qapp.processEvents()
@@ -461,16 +466,16 @@ class TestRename:
         # 预创建冲突文件
         (root_dir / "Stash" / "exists.jpg").write_bytes(b"existing")
 
-        monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("exists.jpg", True))
-        # Mock QMessageBox.warning 避免阻塞
-        warning_calls = []
-        monkeypatch.setattr(QMessageBox, "warning", lambda *a, **kw: warning_calls.append(a))
+        monkeypatch.setattr(window, "_show_rename_dialog", lambda old_name: ("exists.jpg", True))
+        # Mock QMessageBox.information 避免阻塞（UX 重构 Phase 2 Task 5 Q3=C：warning→information）
+        info_calls = []
+        monkeypatch.setattr(QMessageBox, "information", lambda *a, **kw: info_calls.append(a))
 
         window._on_rename_entry(entry)  # noqa: SLF001
         qapp.processEvents()
 
-        # 弹了 warning
-        assert len(warning_calls) > 0
+        # 弹了 information
+        assert len(info_calls) > 0
         # 原文件未改名
         assert (root_dir / "Stash" / "preview.jpg").is_file()
 
@@ -482,7 +487,7 @@ class TestRename:
         entry = _select_entry(qapp, window, "preview.jpg")
 
         monkeypatch.setattr(
-            QInputDialog, "getText", lambda *args, **kwargs: ("list_refresh.jpg", True)
+            window, "_show_rename_dialog", lambda old_name: ("list_refresh.jpg", True)
         )
 
         window._on_rename_entry(entry)  # noqa: SLF001
@@ -601,6 +606,38 @@ class TestDelete:
             e = model.entry_at(row)
             assert e is not None
             assert e.name != "preview.jpg"
+
+    def test_delete_folder_confirm_shows_file_count(self, qapp, file_ops_env, monkeypatch) -> None:
+        """操作合理性3：删除文件夹时确认文案提示内部文件数。"""
+        window, _, root_dir, _ = file_ops_env
+        # 构造一个含 2 个文件的子目录
+        sub = root_dir / "Stash" / "SubFolder"
+        sub.mkdir()
+        (sub / "a.txt").write_text("a", encoding="utf-8")
+        (sub / "b.txt").write_text("b", encoding="utf-8")
+        entry = FileEntry(
+            name="SubFolder",
+            path=str(sub),
+            is_dir=True,
+            modified_at="2026-08-02T00:00:00Z",
+        )
+
+        captured: list[str] = []
+
+        def fake_question(parent, title, text, *args, **kwargs):
+            captured.append(text)
+            return QMessageBox.StandardButton.No
+
+        monkeypatch.setattr(QMessageBox, "question", fake_question)
+
+        window._on_delete_entries([entry])  # noqa: SLF001
+        qapp.processEvents()
+
+        assert captured, "确认对话框应弹出"
+        assert "文件夹内含 2 个文件" in captured[0]
+        assert "此操作不可撤销" in captured[0]
+        # 用户选择 No → 文件夹未被删除
+        assert sub.is_dir()
 
 
 # === 空白区域右键菜单 ===

@@ -9,6 +9,10 @@
 Task 1a：支持多档缓存（256/512）。get_cache / generate 接收 size 参数，
 invalidate 清理指定 unit 的所有档位文件与记录。
 
+UI合理性16（2026-08-03）：卡片视图恢复缓存链路后，应用侧缓存默认使用
+cover 方形居中裁剪模式（与卡片既有视觉一致，无圆角/透明条）；
+contain 圆角/透明填充模式已删除（见 CHANGELOG v0.50.7）。
+
 不访问文件系统的写操作（仅读源图 + 写应用数据目录的缓存 WebP）。
 不修改用户原图。
 
@@ -128,6 +132,8 @@ class ThumbnailService:
         size: int = 256,
     ) -> str:
         """生成缩略图并写入缓存目录 + 更新数据库记录。
+
+        方形居中裁剪填满（UI合理性16，卡片视图视觉）。
 
         - 成功：写入 WebP + upsert status='ok' 记录
         - 源图不存在：upsert status='missing'

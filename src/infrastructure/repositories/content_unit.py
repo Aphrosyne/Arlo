@@ -3,9 +3,9 @@
 负责 ContentUnit dataclass 与 content_unit 表之间的转换。
 不访问文件系统；path 仅作为字符串存储。
 
-v11 schema（Stage 5 Code Review）：
-- status 列移除，新增 is_marked INTEGER NOT NULL DEFAULT 1
-- 新增 path_key TEXT NOT NULL UNIQUE 列（DB 层强制路径归一化唯一）
+v11 schema（Stage 5 Code Review）：status → is_marked + 新增 path_key。
+v13 schema（UX 重构 Task 6）：移除 is_marked 列，回归纯 DELETE 模式
+（记录存在即已标记；取消标记 = 删除记录，级联清理 content_unit_tag / thumbnail_cache）。
 - create 时自动回填 path_key = make_path_key(path)
 """
 
@@ -39,19 +39,17 @@ class ContentUnitRepository:
             self._conn.execute(
                 """
                 INSERT INTO content_unit (
-                    id, path, path_key, title, content_type, source_url,
-                    cover_path, is_marked, notes, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, path, path_key, content_type, source_url,
+                    cover_path, notes, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     unit.id,
                     unit.path,
                     path_key,
-                    unit.title,
                     unit.content_type,
                     unit.source_url,
                     unit.cover_path,
-                    int(unit.is_marked),
                     unit.notes,
                     unit.created_at,
                     unit.updated_at,
@@ -85,6 +83,19 @@ class ContentUnitRepository:
             ).fetchone()
         except sqlite3.Error as e:
             raise RepositoryError(f"无法按 path 查询 ContentUnit：{e}") from e
+        if row is None:
+            return None
+        return self._row_to_model(row)
+
+    def get_by_path_key(self, path_key: str) -> ContentUnit | None:
+        """按归一化 path_key 查询（唯一约束）；不存在返回 None。"""
+        try:
+            row = self._conn.execute(
+                "SELECT * FROM content_unit WHERE path_key = ?",
+                (path_key,),
+            ).fetchone()
+        except sqlite3.Error as e:
+            raise RepositoryError(f"无法按 path_key 查询 ContentUnit：{e}") from e
         if row is None:
             return None
         return self._row_to_model(row)
@@ -143,11 +154,9 @@ class ContentUnitRepository:
                 UPDATE content_unit SET
                     path = ?,
                     path_key = ?,
-                    title = ?,
                     content_type = ?,
                     source_url = ?,
                     cover_path = ?,
-                    is_marked = ?,
                     notes = ?,
                     updated_at = ?
                 WHERE id = ?
@@ -155,11 +164,9 @@ class ContentUnitRepository:
                 (
                     unit.path,
                     path_key,
-                    unit.title,
                     unit.content_type,
                     unit.source_url,
                     unit.cover_path,
-                    int(unit.is_marked),
                     unit.notes,
                     unit.updated_at,
                     unit.id,
@@ -210,11 +217,9 @@ class ContentUnitRepository:
         return ContentUnit(
             id=row["id"],
             path=row["path"],
-            title=row["title"],
             content_type=row["content_type"],
             source_url=row["source_url"],
             cover_path=row["cover_path"],
-            is_marked=bool(row["is_marked"]),
             notes=row["notes"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],

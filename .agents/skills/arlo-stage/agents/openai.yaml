@@ -1,0 +1,4 @@
+interface:
+  display_name: "Arlo 阶段推进"
+  short_description: "按 Arlo 活动路线图规划、实施、验证一个阶段或批次"
+  default_prompt: "使用 $arlo-stage 推进当前活动路线图的阶段或批次"

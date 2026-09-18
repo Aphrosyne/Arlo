@@ -84,6 +84,7 @@ class ScanService:
         now_provider: Callable[[], str] | None = None,
         uuid_provider: Callable[[], str] | None = None,
         uow: UnitOfWork | None = None,
+        archive_root: Path | None = None,
     ) -> None:
         """初始化 ScanService。
 
@@ -100,11 +101,14 @@ class ScanService:
                 执行，保证原子性。None 时保持原行为（调用方控制事务边界，
                 如 ScanWorker.run 末尾的 conn.commit()）。单个 content_unit
                 创建失败的预期异常仍在事务内捕获，不触发回滚。
+            archive_root: 归档根目录（功能增加1，2026-08-04）。注入 FileScanner
+                后，该目录及其子目录内的压缩包不再作为内容单元候选（扫描跳过），
+                目录树 folder_cache 仍完整记录。
         """
         self._managed_root_repo = managed_root_repo
         self._folder_cache_repo = folder_cache_repo
         self._content_unit_repo = content_unit_repo
-        self._scanner = scanner or FileScanner()
+        self._scanner = scanner or FileScanner(archive_root=archive_root)
         self._now = now_provider or _default_now_utc
         self._new_uuid = uuid_provider or _default_uuid_provider
         self._uow = uow
@@ -238,6 +242,14 @@ class ScanService:
 
         summary.scanned_dirs = len(result.scanned_dirs)
 
+        # 清理失效 content_unit 行（数据库问题1，2026-08-02）：
+        # 文件被重命名/移动/删除后，旧路径的 content_unit 行此前没有任何逻辑清理，
+        # 导致搜索出现重复条目（旧行残留 + 新路径新增一行）。扫描时对当前 root
+        # 前缀下的行做 exists 检查，路径已不存在的行直接删除（级联 content_unit_tag /
+        # thumbnail_cache）。安全护栏：root 本身不存在（移动硬盘/网络盘掉线）时
+        # 跳过整轮清理，避免误删整库元数据。
+        self._cleanup_stale_content_units(summary.root_path)
+
         # 持久化 content_unit（仅插入新候选）
         # spec §5.4 2026-07-13 修正：压缩包文件本身作为内容单元候选
         # spec §5.4：手动标记文件夹为内容单元时，其内部所有子项标记自动取消。
@@ -256,9 +268,7 @@ class ScanService:
             unit = ContentUnit(
                 id=self._new_uuid(),
                 path=archive_path,
-                title=Path(archive_path).name,
                 content_type="mod",
-                is_marked=True,
                 created_at=now,
                 updated_at=now,
             )
@@ -271,6 +281,54 @@ class ScanService:
                 summary.errors.append(f"{unit.path}: 无法创建内容单元")
 
         summary.content_units_found = new_units_count
+
+    def _cleanup_stale_content_units(self, root_path: str) -> None:
+        """删除当前 root 下文件已不存在的 content_unit 行（数据库问题1）。
+
+        - 仅处理 root_path 前缀下的行（含 root 自身精确匹配）
+        - Path(path).exists() 为 False 视为失效（文件被重命名/移动/删除）
+        - 删除复用 ContentUnitRepository.delete（显式级联 content_unit_tag /
+          thumbnail_cache，schema 未声明 ON DELETE CASCADE）
+        - root 本身不存在时跳过（移动硬盘/网络盘临时掉线时不误删元数据）
+        - 删除的行记日志；单行失败不中断整体扫描
+        """
+        if not Path(root_path).exists():
+            return
+        try:
+            units = self._content_unit_repo.list_all()
+        except (RepositoryError, sqlite3.Error) as e:
+            logger.warning("失效内容单元清理失败（查询）：%s", e)
+            return
+
+        import os
+
+        root_key = make_path_key(root_path)
+        sep = os.sep
+        root_prefix = root_key.rstrip(sep) + sep
+        deleted = 0
+        for unit in units:
+            unit_key = make_path_key(unit.path)
+            if unit_key != root_key and not unit_key.startswith(root_prefix):
+                continue
+            try:
+                exists = Path(unit.path).exists()
+            except OSError:
+                exists = False
+            if exists:
+                continue
+            try:
+                self._content_unit_repo.delete(unit.id)
+                deleted += 1
+                logger.info("扫描清理失效内容单元：%s（文件已不存在）", unit.path)
+            except (RepositoryError, sqlite3.Error) as e:
+                logger.warning(
+                    "删除失效内容单元失败：unit_id=%s path=%s err=%s",
+                    unit.id,
+                    unit.path,
+                    e,
+                )
+        if deleted:
+            logger.info("本次扫描共清理 %d 条失效内容单元记录", deleted)
 
     def _has_ancestor_content_unit(self, path: str | Path, cu_path_keys: set[str]) -> bool:
         """检查 path 的任一祖先是否已是 ContentUnit。

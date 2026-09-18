@@ -18,9 +18,13 @@ list_directory_entries：从文件系统读取目录下所有条目（roadmap Ta
 不依赖 Path.resolve()（后者会访问文件系统解析符号链接，语义不一致）。
 
 Stage 4 Task 2 新增：
-- update_metadata：编辑 title / source_url / notes / cover_path。
+- update_metadata：编辑 source_url / notes / cover_path。
 - list_cover_candidates：列出内容单元目录内所有支持的图片格式（用于 CoverPickerDialog）。
 - 委托 TagService 完成标签关联与批量打标签。
+
+schema v15（2026-08-05）：content_unit.title 列已物理删除（UI合理性13 起
+停止使用）——创建不再有 title、update_metadata 不提供 title 参数；
+重命名/移动由 FileOperationService 处理且不维护 title。
 """
 
 from __future__ import annotations
@@ -59,9 +63,6 @@ logger = logging.getLogger(__name__)
 _COVER_IMAGE_EXTENSIONS = frozenset(
     {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".ico"}
 )
-
-# title 最大长度（避免过长破坏 UI 布局）
-_TITLE_MAX_LENGTH = 200
 
 # source_url 最大长度
 _URL_MAX_LENGTH = 2000
@@ -150,31 +151,27 @@ class ContentService:
     def create_content_unit(
         self,
         path: Path,
-        title: str | None = None,
         content_type: str = "mod",
-        is_marked: bool = True,
     ) -> ContentUnit:
         """创建新 ContentUnit。
 
         Args:
             path: 内容单元对应的真实路径（文件或文件夹）。
-            title: 标题，默认 None（显示时回退到路径名）。
             content_type: 类型，默认 "mod"。
-            is_marked: 是否已标记为内容单元，默认 True。
 
         Returns:
             新创建的 ContentUnit。
 
         Raises:
             ConstraintViolationError: path 已存在 ContentUnit。
+
+        UI合理性13：不再接收 title（schema v15 已删除该列）。
         """
         now = self._now()
         unit = ContentUnit(
             id=self._new_uuid(),
             path=str(path),
-            title=title,
             content_type=content_type,
-            is_marked=is_marked,
             created_at=now,
             updated_at=now,
         )
@@ -187,12 +184,10 @@ class ContentService:
         标记自动取消（避免父子同时标记）。
 
         行为：
-        - 若 path 已是 ContentUnit 且 is_marked=True：返回现有 unit（不重复创建）。
-        - 若 path 已是 ContentUnit 且 is_marked=False：恢复为 is_marked=True（重新标记）。
+        - 若 path 已是 ContentUnit：返回现有 unit（纯 DELETE 模式：记录存在即已标记）。
         - 若 path 是文件夹：先 list_by_path_prefix_normalized 查询子项 ContentUnit
-          （不含自身），逐个 delete 已标记子项（ContentUnitRepository.delete
-          已级联清理 content_unit_tag）；is_marked=False 子项保留（用户显式取消标记的偏好
-          不应被覆盖）；然后创建或恢复 ContentUnit。
+          （不含自身），逐个 delete 子项（ContentUnitRepository.delete 已级联清理
+          content_unit_tag + thumbnail_cache）；然后创建 ContentUnit。
         - 若 path 是文件：直接创建（不查子项）。
 
         Stage 4.5 H6 修复：若注入了 uow，多步写操作（删除子项 + 创建/恢复父标记）
@@ -239,19 +234,17 @@ class ContentService:
         # 查询现有记录
         existing = self._repo.get_by_path(str(path))
 
-        # 已标记且 is_marked=True：返回现有（不重复创建）
-        if existing is not None and existing.is_marked:
+        # 纯 DELETE 模式：记录存在即已标记，返回现有（不重复创建）
+        if existing is not None:
             return existing
 
-        # 文件夹：取消子项标记（保留 is_marked=False 子项）
+        # 文件夹：删除子项标记（spec §5.4 父子不可同时标记）
         if is_dir:
             children = self._repo.list_by_path_prefix_normalized(str(path))
             # 排除 path 自身（list_by_path_prefix_normalized 含 prefix 自身）
             failures: list[tuple[str, str]] = []
             for child in children:
                 if make_path_key(child.path) != make_path_key(str(path)):
-                    if not child.is_marked:
-                        continue  # 保留用户显式取消标记的偏好
                     try:
                         self._repo.delete(child.id)
                     except (RepositoryError, sqlite3.Error) as e:  # noqa: BLE001
@@ -266,14 +259,8 @@ class ContentService:
                     failures=failures,
                 )
 
-        # 创建新记录或恢复 is_marked=False 记录
-        if existing is not None:
-            # existing.is_marked == False → 恢复为 is_marked=True
-            updated = replace(existing, is_marked=True, updated_at=self._now())
-            result = self._repo.update(updated)
-        else:
-            # 默认 title=path.name（文件名或文件夹名），避免元数据面板显示"（无标题）"
-            result = self.create_content_unit(path, title=path.name)
+        # 创建新记录（UI合理性13：不再默认 title=文件名；schema v15 已删除该列）
+        result = self.create_content_unit(path)
 
         # Stage 5 Task 1：标记文件夹为内容单元时自动录入封面
         # 仅文件夹内容单元 + cover_path 为空时尝试，无图片不报错
@@ -327,11 +314,12 @@ class ContentService:
     def unmark_content_unit(self, unit_id: str) -> None:
         """取消内容单元标记。
 
-        将 ContentUnit 的 is_marked 设为 False（而非删除记录），使扫描不再
-        重复创建该路径的内容单元（roadmap：扫描候选的纠错能力）。**不删除真实文件**。
+        纯 DELETE 模式（UX 重构 Task 6）：取消标记 = 删除记录。
+        ContentUnitRepository.delete 级联清理 content_unit_tag 与 thumbnail_cache
+        记录（缓存文件由启动 GC 清理）。**不删除真实文件**。
 
-        UI 层将 is_marked=False 状态视为无内容单元（不显示标记、不响应双击）。
-        若用户再次 mark_as_content_unit，is_marked 恢复为 True。
+        注意（roadmap 既定决策）：若路径是压缩包，下次扫描会重新识别为内容单元候选
+        （不再有墓碑记录阻止重建）；文件夹不受影响（文件夹不自动识别）。
 
         Args:
             unit_id: 待取消的 ContentUnit ID。
@@ -342,10 +330,43 @@ class ContentService:
         unit = self._repo.get_by_id(unit_id)
         if unit is None:
             raise ContentUnitNotFoundError(f"内容单元不存在：{unit_id}")
-        if not unit.is_marked:
-            return  # 已取消标记，幂等
-        updated = replace(unit, is_marked=False, updated_at=self._now())
-        self._repo.update(updated)
+        self._repo.delete(unit_id)
+
+    def unmark_path_and_descendants(self, path: Path) -> int:
+        """删除路径自身及其所有子项的内容单元记录（功能增加1 归档，2026-08-04）。
+
+        语义（简化版决策，用户确认 2026-08-04）：
+        - 归档根目录标记时与归档移动后调用，保证归档目录内不再保留任何
+          内容单元标记（"取消标记 = 删除记录"，纯 DELETE 模式）。
+        - ContentUnitRepository.delete 级联清理 content_unit_tag 与
+          thumbnail_cache 记录。**不删除真实文件**。
+        - 路径前缀匹配使用 make_path_key() 归一化（list_by_path_prefix_normalized），
+          含 path 自身。
+
+        Args:
+            path: 待清除标记的路径（含自身及其子项）。
+
+        Returns:
+            删除的记录数。
+
+        Raises:
+            RepositoryError / sqlite3.Error: 任一删除失败时抛出，调用方回滚。
+        """
+
+        def _core() -> int:
+            units = self._repo.list_by_path_prefix_normalized(str(path))
+            count = 0
+            for unit in units:
+                self._repo.delete(unit.id)
+                count += 1
+            return count
+
+        # 与 mark_as_content_unit 一致：注入 UoW 时在事务内执行（支持嵌套），
+        # 保证多步删除原子性。
+        if self._uow is not None:
+            with self._uow.transaction():
+                return _core()
+        return _core()
 
     def list_directory_entries(self, dir_path: str) -> list[FileEntry]:
         """返回 dir_path 下所有文件和文件夹条目，并关联 content_unit。
@@ -379,83 +400,11 @@ class ContentService:
         entries.sort(key=lambda e: (not e.is_dir, e.name.lower(), e.name))
         return entries
 
-    def list_staging_entries(self, staging_path: str) -> list[FileEntry]:
-        """递归返回暂存区 staging_path 下所有文件和文件夹条目，并关联 content_unit。
-
-        阶段 3 Task 2：暂存区文件列表。
-
-        与 list_directory_entries 区别：
-        - 递归遍历所有子目录（Path.rglob("*")），不只单层；
-        - 批量预查 content_unit（一次 list_by_path_prefix_normalized 取回所有
-          相关单元，构建 path_key → ContentUnit 映射），避免 N 次 DB 查询。
-
-        数据源为文件系统，仅读取元数据（is_dir / is_file / stat），跳过符号链接。
-        单条目读取失败不中断整体遍历（记日志后跳过）。
-
-        排序规则：文件夹在前（is_dir=True 优先），同类型按 name 升序（不区分大小写）。
-        排序为初始默认顺序；UI 层可通过 FileListModel.set_sort_key 切换排序键。
-
-        若 staging_path 不存在、不是目录或读取失败，返回空列表（记日志）。
-        """
-        root = Path(staging_path)
-        try:
-            if not root.is_dir():
-                return []
-        except OSError as e:
-            logger.warning("list_staging_entries: 路径检查失败 %s: %s", staging_path, e)
-            return []
-
-        # 批量预查 content_unit：一次 SQL 拿回所有相关单元，构建 path_key 映射
-        # is_marked=False 的单元不纳入映射（视为无内容单元）
-        # 使用 list_by_path_prefix_normalized（统一归一化接口，原 list_by_path_prefix
-        # 已在 TD-L20 清理中删除）
-        unit_map: dict[str, ContentUnit] = {}
-        try:
-            units = self._repo.list_by_path_prefix_normalized(staging_path)
-            for unit in units:
-                if not unit.is_marked:
-                    continue
-                unit_map[make_path_key(unit.path)] = unit
-        except (RepositoryError, sqlite3.Error):  # 数据库查询失败不阻塞文件系统遍历
-            logger.exception("list_staging_entries: 预查 content_unit 失败：%s", staging_path)
-
-        entries: list[FileEntry] = []
-        try:
-            for child in root.rglob("*"):
-                entry = self._build_entry_with_map(child, unit_map)
-                if entry is not None:
-                    entries.append(entry)
-        except OSError as e:
-            logger.warning("list_staging_entries: 递归读取失败 %s: %s", staging_path, e)
-            return []
-
-        # spec §7.3：暂存区文件列表显示"零散文件"。
-        # 若某个文件夹已被标记为内容单元（即 Mod 组文件夹），
-        # 其内部的子文件/子文件夹视为"已收纳"，不再显示在列表中。
-        # 这与 spec §5.4（标记文件夹时取消子项标记）的语义一致。
-        cu_folder_keys: set[str] = set()
-        for entry in entries:
-            if entry.is_dir and entry.content_unit is not None:
-                cu_folder_keys.add(make_path_key(entry.path))
-
-        if cu_folder_keys:
-            filtered: list[FileEntry] = []
-            for entry in entries:
-                if self._has_ancestor_in_set(entry.path, cu_folder_keys):
-                    continue
-                filtered.append(entry)
-            entries = filtered
-
-        # 文件夹在前，名称不区分大小写升序
-        entries.sort(key=lambda e: (not e.is_dir, e.name.lower(), e.name))
-        return entries
-
     # --- 元数据编辑（Stage 4 Task 2） ---
 
     def update_metadata(
         self,
         unit_id: str,
-        title: str | None = None,
         source_url: str | None = None,
         notes: str | None = None,
         cover_path: str | None = None,
@@ -471,7 +420,6 @@ class ContentService:
 
         Args:
             unit_id: 内容单元 ID。
-            title: 新标题。None 不改；"" 清空；strip 后为空视为清空。
             source_url: 新来源 URL。None 不改；"" 清空。
             notes: 新备注。None 不改；"" 清空。
             cover_path: 新封面相对路径。None 不改；"" 清空。
@@ -482,7 +430,7 @@ class ContentService:
 
         Raises:
             ContentUnitNotFoundError: unit_id 不存在。
-            InvalidMetadataError: title 过长 / source_url 过长 / cover_path 不存在。
+            InvalidMetadataError: source_url 过长 / cover_path 不存在。
             CoverImageNotFoundError: cover_path 指定的图片在内容单元目录下不存在。
         """
         unit = self._repo.get_by_id(unit_id)
@@ -493,13 +441,7 @@ class ContentService:
         cover_changed = False
         original_cover_path = unit.cover_path
 
-        # 校验并应用各字段
-        if title is not None:
-            title = title.strip()
-            if len(title) > _TITLE_MAX_LENGTH:
-                raise InvalidMetadataError(f"标题不能超过 {_TITLE_MAX_LENGTH} 个字符")
-            unit.title = title or None  # 空字符串 → None
-
+        # 校验并应用各字段（UI合理性13：title 已停用；schema v15 已删除该列）
         if source_url is not None:
             source_url = source_url.strip()
             if len(source_url) > _URL_MAX_LENGTH:
@@ -603,45 +545,13 @@ class ContentService:
         candidates.sort(key=lambda p: (p.name.lower(), p.name))
         return candidates
 
-    def quick_set_cover(self, unit_id: str) -> bool:
-        """快速设置封面（Stage 5 Task 1）。
+    def is_image_file(self, path: str | Path) -> bool:
+        """按扩展名判断是否为支持的图片文件（供 UI 图片预览判断，不访问文件内容）。
 
-        取内容单元目录下第一张图片（list_cover_candidates 已排序）设为封面。
-        若已有手动封面则不覆盖。仅文件夹内容单元可用。
-
-        Args:
-            unit_id: 内容单元 ID。
-
-        Returns:
-            True 表示设置成功；False 表示无可用图片或非文件夹内容单元（不报错）。
-
-        Raises:
-            ContentUnitNotFoundError: unit_id 不存在。
+        扩展名集合与封面候选一致（_COVER_IMAGE_EXTENSIONS，同
+        thumbnail_generator.SUPPORTED_EXTENSIONS）。
         """
-        unit = self._repo.get_by_id(unit_id)
-        if unit is None:
-            raise ContentUnitNotFoundError(f"内容单元不存在：{unit_id}")
-
-        # 仅文件夹内容单元可用；压缩包内容单元直接跳过
-        try:
-            if not Path(unit.path).is_dir():
-                return False
-        except OSError:
-            return False
-
-        # 已有手动封面不覆盖
-        if unit.cover_path:
-            return False
-
-        candidates = self.list_cover_candidates(unit.path)
-        if not candidates:
-            return False  # 无图片，不报错
-
-        first = candidates[0]
-        rel_path = first.name
-        # 走 update_metadata 以复用 cover_path 校验 + 缩略图 invalidate 链路
-        self.update_metadata(unit_id, cover_path=rel_path)
-        return True
+        return Path(path).suffix.lower() in _COVER_IMAGE_EXTENSIONS
 
     def _build_entry(self, child: Path) -> FileEntry | None:
         """从单个 Path 构建 FileEntry（单次精确查询 content_unit）。跳过符号链接。"""
@@ -660,9 +570,6 @@ class ContentService:
         content_unit: ContentUnit | None = None
         try:
             content_unit = self._repo.get_by_path(str(child))
-            # is_marked=False 视为无内容单元（用户显式取消标记）
-            if content_unit is not None and not content_unit.is_marked:
-                content_unit = None
         except (RepositoryError, sqlite3.Error):  # 数据库查询失败不应中断遍历
             logger.exception("查询 content_unit 失败：path=%s", child)
 
@@ -674,49 +581,6 @@ class ContentService:
             size=size,
             content_unit=content_unit,
         )
-
-    def _build_entry_with_map(
-        self, child: Path, unit_map: dict[str, ContentUnit]
-    ) -> FileEntry | None:
-        """从单个 Path 构建 FileEntry，content_unit 从预构建的 path_key 映射查询。
-
-        用于 list_staging_entries 的批量关联场景，避免 N 次 DB 查询。
-        """
-        try:
-            if child.is_symlink():
-                return None
-            is_dir = child.is_dir()
-            stat = child.stat()
-            modified_at = _mtime_to_iso(stat.st_mtime)
-            size: int | None = None if is_dir else stat.st_size
-        except OSError as e:
-            logger.warning("list_staging_entries: 读取条目失败 %s: %s", child, e)
-            return None
-
-        content_unit = unit_map.get(make_path_key(str(child)))
-
-        return FileEntry(
-            name=child.name,
-            path=str(child),
-            is_dir=is_dir,
-            modified_at=modified_at,
-            size=size,
-            content_unit=content_unit,
-        )
-
-    def _has_ancestor_in_set(self, path: str, ancestor_keys: set[str]) -> bool:
-        """检查 path 的任一祖先（不含自身）是否在 ancestor_keys 集合中。
-
-        基于 make_path_key 归一化后比较。
-        从 path.parent 逐级向上直到根目录。
-        """
-        p = Path(path)
-        parent = p.parent
-        while parent != parent.parent:
-            if make_path_key(parent) in ancestor_keys:
-                return True
-            parent = parent.parent
-        return False
 
 
 def _mtime_to_iso(mtime: float) -> str:

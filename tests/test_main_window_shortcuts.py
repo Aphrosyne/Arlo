@@ -24,17 +24,17 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QInputDialog, QMessageBox  # noqa: E402
+from PySide6.QtWidgets import QMessageBox  # noqa: E402
 
 from app.main_window import MainWindow  # noqa: E402
 from application.clipboard_service import ClipboardService  # noqa: E402
 from application.content_service import ContentService  # noqa: E402
+from application.file_operation_service import FileOperationService  # noqa: E402
 from application.folder_tree_service import FolderTreeService  # noqa: E402
 from application.managed_root_service import ManagedRootService  # noqa: E402
 from application.scan_service import ScanService  # noqa: E402
 from application.undo_service import UndoService  # noqa: E402
 from infrastructure.db import get_connection, init_db  # noqa: E402
-from infrastructure.file_operation_service import FileOperationService  # noqa: E402
 from infrastructure.folder_cache_sync_helper import FolderCacheSyncHelper  # noqa: E402
 from infrastructure.repositories.content_unit import ContentUnitRepository  # noqa: E402
 from infrastructure.repositories.folder_cache import FolderCacheRepository  # noqa: E402
@@ -74,6 +74,8 @@ def shortcut_env(qapp, tmp_path: Path):
 
     managed_service = ManagedRootService(
         ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
         now_provider=lambda: "2026-07-30T00:00:00Z",
         uuid_provider=fake_uuid,
     )
@@ -172,7 +174,7 @@ class TestF2RenameContent:
         _select_entry(qapp, window, "file1.7z")
 
         # Mock 重命名对话框返回新名称
-        monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("renamed.7z", True))
+        monkeypatch.setattr(window, "_show_rename_dialog", lambda old_name: ("renamed.7z", True))
 
         # 直接调用 handler（模拟 QShortcut 触发）
         window._on_shortcut_rename_content()  # noqa: SLF001
@@ -198,7 +200,7 @@ class TestF2RenameContent:
 
         # Mock 重命名对话框
         monkeypatch.setattr(
-            QInputDialog, "getText", lambda *args, **kwargs: ("renamed_first.7z", True)
+            window, "_show_rename_dialog", lambda old_name: ("renamed_first.7z", True)
         )
 
         window._on_shortcut_rename_content()  # noqa: SLF001
@@ -237,7 +239,7 @@ class TestF2RenameTree:
         qapp.processEvents()
 
         # Mock 重命名对话框
-        monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("RenamedStash", True))
+        monkeypatch.setattr(window, "_show_rename_dialog", lambda old_name: ("RenamedStash", True))
 
         window._on_shortcut_rename_tree()  # noqa: SLF001
         qapp.processEvents()
@@ -622,6 +624,8 @@ class TestShortcutRegistration:
 
         managed_service = ManagedRootService(
             ManagedRootRepository(conn),
+            FolderCacheRepository(conn),
+            ContentUnitRepository(conn),
             now_provider=lambda: "2026-07-30T00:00:00Z",
             uuid_provider=fake_uuid,
         )
@@ -684,6 +688,8 @@ class TestShortcutRegistration:
 
         managed_service = ManagedRootService(
             ManagedRootRepository(conn),
+            FolderCacheRepository(conn),
+            ContentUnitRepository(conn),
             now_provider=lambda: "2026-07-30T00:00:00Z",
             uuid_provider=fake_uuid,
         )

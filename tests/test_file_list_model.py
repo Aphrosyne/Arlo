@@ -52,16 +52,14 @@ def _make_entry(
 def _make_unit(
     unit_id: str = "u-1",
     path: str = "/mods/armor",
-    title: str | None = None,
-    is_marked: bool = True,
+    cover_path: str | None = None,
 ) -> ContentUnit:
     return ContentUnit(
         id=unit_id,
         path=path,
         created_at="2026-07-13T00:00:00Z",
         updated_at="2026-07-13T00:00:00Z",
-        title=title,
-        is_marked=is_marked,
+        cover_path=cover_path,
     )
 
 
@@ -189,14 +187,15 @@ class TestDisplayRole:
         idx = model.index(0, COL_NAME)
         assert model.data(idx, Qt.DisplayRole) == "readme.txt"
 
-    def test_name_column_content_unit_marker(self, qapp) -> None:  # noqa: ANN001
+    def test_name_column_content_unit_plain_name(self, qapp) -> None:  # noqa: ANN001
         from PySide6.QtCore import Qt
 
         unit = _make_unit()
         model = FileListModel()
         model.refresh([_make_entry("armor", "/mods/armor", is_dir=True, content_unit=unit)])
         idx = model.index(0, COL_NAME)
-        assert model.data(idx, Qt.DisplayRole) == f"armor{ui.CONTENT_UNIT_MARKER}"
+        # UI合理性13（2026-08-04）：🔗 徽章由 delegate 绘制，DisplayRole 为纯文件名
+        assert model.data(idx, Qt.DisplayRole) == "armor"
 
     def test_type_column_directory(self, qapp) -> None:  # noqa: ANN001
         from PySide6.QtCore import Qt
@@ -236,7 +235,27 @@ class TestDisplayRole:
         model = FileListModel()
         model.refresh([_make_entry("f.txt", "/f.txt", is_dir=False, size=12345)])
         idx = model.index(0, COL_SIZE)
-        assert model.data(idx, Qt.DisplayRole) == "12345"
+        # UI合理性5：大小列带单位自动缩写
+        assert model.data(idx, Qt.DisplayRole) == "12.1 KB"
+
+    def test_size_text_formats_with_units(self, qapp) -> None:  # noqa: ANN001
+        """大小列格式化：B / KB / MB / GB，去除尾随 0。"""
+        from PySide6.QtCore import Qt
+
+        model = FileListModel()
+        cases = [
+            (10, "10 B"),
+            (1023, "1023 B"),
+            (1024, "1 KB"),
+            (1536, "1.5 KB"),
+            (12345, "12.1 KB"),
+            (5 * 1024 * 1024, "5 MB"),
+            (3.5 * 1024 * 1024 * 1024, "3.5 GB"),
+        ]
+        for size, expected in cases:
+            model.refresh([_make_entry("f", "/f", is_dir=False, size=int(size))])
+            idx = model.index(0, COL_SIZE)
+            assert model.data(idx, Qt.DisplayRole) == expected, f"size={size}"
 
     def test_size_column_directory_empty_string(self, qapp) -> None:  # noqa: ANN001
         from PySide6.QtCore import Qt
@@ -336,6 +355,34 @@ class TestDecorationRole:
         # 类型列不返回图标
         idx = model.index(0, COL_TYPE)
         assert model.data(idx, Qt.DecorationRole) is None
+
+    def test_icons_differ_by_file_type(self, qapp) -> None:  # noqa: ANN001
+        """UI合理性4：文件夹/压缩包/图片/其他文档显示不同类型图标。"""
+        from app.file_type_icons import (
+            ICON_ARCHIVE,
+            ICON_DOCUMENT,
+            ICON_FOLDER,
+            ICON_IMAGE,
+            file_type_key,
+        )
+
+        model = FileListModel()
+        entries = [
+            _make_entry("armor", "/mods/armor", is_dir=True),
+            _make_entry("mod.zip", "/mods/mod.zip", size=10),
+            _make_entry("preview.jpg", "/mods/preview.jpg", size=10),
+            _make_entry("readme.txt", "/mods/readme.txt", size=10),
+        ]
+        model.refresh(entries)
+        icon_keys = {
+            entry.name: model.icon_for(entry).pixmap(16, 16).cacheKey()
+            for entry in model._entries  # noqa: SLF001
+        }
+        assert len(set(icon_keys.values())) == 4
+        assert file_type_key(entries[0]) == ICON_FOLDER
+        assert file_type_key(entries[1]) == ICON_ARCHIVE
+        assert file_type_key(entries[2]) == ICON_IMAGE
+        assert file_type_key(entries[3]) == ICON_DOCUMENT
 
 
 class TestSort:
@@ -500,3 +547,46 @@ class TestRowCount:
 
         model = FileListModel()
         assert model.columnCount(QModelIndex()) == 4
+
+
+# === UI合理性5：封面图标（复用现有缓存，不产生新缓存） ===
+
+
+def test_folder_content_unit_with_cover_uses_provider_icon(qapp) -> None:
+    """有封面的文件夹内容单元 → 使用 provider 返回的封面图标。"""
+    from pathlib import Path
+
+    from PySide6.QtGui import QIcon, QPixmap
+
+    model = FileListModel()
+    called: list[tuple[str, str]] = []
+
+    def provider(unit_id: str, source_path: str) -> QIcon | None:
+        called.append((unit_id, source_path))
+        return QIcon(QPixmap(16, 16))
+
+    model.set_cover_icon_provider(provider)
+    unit = _make_unit(cover_path="cover.jpg")
+    entry = _make_entry("armor", "/mods/armor", is_dir=True, content_unit=unit)
+
+    icon = model.icon_for(entry)
+    assert icon is not None and not icon.isNull()
+    assert called == [("u-1", str(Path("/mods/armor") / "cover.jpg"))]
+
+
+def test_folder_without_cover_does_not_use_provider(qapp) -> None:
+    """无封面/未标记/文件条目 → 不使用封面 provider，返回标准图标。"""
+    model = FileListModel()
+    called: list = []
+    model.set_cover_icon_provider(lambda uid, src: called.append((uid, src)) or None)
+
+    # 文件夹无封面
+    unit = _make_unit(cover_path=None)
+    icon1 = model.icon_for(_make_entry("armor", "/mods/armor", is_dir=True, content_unit=unit))
+    # 文件内容单元有封面（issue 限定文件夹类）
+    unit2 = _make_unit(unit_id="u-2", path="/mods/a.jpg", cover_path="cover.jpg")
+    icon2 = model.icon_for(_make_entry("a.jpg", "/mods/a.jpg", content_unit=unit2))
+
+    assert called == []
+    assert icon1 is not None
+    assert icon2 is not None

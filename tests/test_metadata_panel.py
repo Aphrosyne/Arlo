@@ -6,9 +6,9 @@
 - 标签自动补全（QCompleter QStringListModel）
 - 保存按钮：成功写入 metadata + 标签 attach/detach diff + 发射 on_saved 信号
 - 保存失败：InvalidMetadataError 弹 QMessageBox
-- 封面设置回调：on_pick_cover_requested 信号 + set_cover_path 更新预览
-- 清除封面按钮
-- 测试接口：title_text / source_url_text / notes_text / cover_path_text / tag_chips
+- 封面即时保存（操作便捷性6）：on_pick_cover_requested 信号 + apply_cover 立即落库
+- 清除封面按钮（同样立即落库）
+- 测试接口：rename_text / source_url_text / notes_text / cover_path_text / tag_chips
 
 测试使用 tmp_path + init_db 构造真实 service。
 QMessageBox 通过 monkeypatch 替换为 lambda，避免模态阻塞。
@@ -23,7 +23,13 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import QSettings, Qt  # noqa: E402
+from PySide6.QtWidgets import QPushButton, QVBoxLayout  # noqa: E402
+
+from app import ui_constants as ui  # noqa: E402
 from app.metadata_panel import MetadataPanel  # noqa: E402
+from app.recent_tags import RecentTags  # noqa: E402
+from app.tag_colors import category_color_hex  # noqa: E402
 from application.content_service import ContentService  # noqa: E402
 from application.errors import InvalidMetadataError  # noqa: E402
 from application.tag_service import TagService  # noqa: E402
@@ -76,8 +82,8 @@ def unit_with_tags(services, tmp_path):
     conn.commit()
 
     # 创建分类 + 标签
-    cat1 = tag_service.create_category("服装护甲", color_hue=210)
-    cat2 = tag_service.create_category("状态", color_hue=120)
+    cat1 = tag_service.create_category("服装护甲", color_hex="#1A78D6")
+    cat2 = tag_service.create_category("状态", color_hex="#1AD61A")
     tag1 = tag_service.create_tag("重甲", cat1.id)  # 将与 unit 关联
     tag2 = tag_service.create_tag("已测试", cat2.id)  # 不关联
     tag_service.attach_tag_to_unit(unit.id, tag1.id)
@@ -95,7 +101,7 @@ def test_panel_initial_state(qapp, services):
     panel = MetadataPanel(content_service, tag_service)
 
     assert panel.current_unit() is None
-    assert panel.title_text() == ""
+    assert panel.rename_text() == ""
     assert panel.source_url_text() == ""
     assert panel.notes_text() == ""
     assert panel.tag_chips() == []
@@ -126,8 +132,8 @@ def test_panel_load_unit_fills_fields(qapp, unit_with_tags):
     panel.load_unit(unit)
     assert panel.current_unit() is not None
     assert panel.current_unit().id == unit.id
-    # mark_as_content_unit 默认 title = 文件夹名
-    assert panel.title_text() == "MyMod"
+    # 重命名栏显示真实文件名（UI合理性13）
+    assert panel.rename_text() == "MyMod"
     assert panel.is_form_enabled()
     assert panel.is_save_button_enabled()
     assert panel.is_pick_cover_button_enabled()
@@ -161,7 +167,7 @@ def test_panel_load_none_clears(qapp, unit_with_tags):
 
     panel.load_unit(None)
     assert panel.current_unit() is None
-    assert panel.title_text() == ""
+    assert panel.rename_text() == ""
     assert not panel.is_form_enabled()
 
 
@@ -176,11 +182,49 @@ def test_clear_panel_resets_all(qapp, unit_with_tags):
 
     panel.clear_panel()
     assert panel.current_unit() is None
-    assert panel.title_text() == ""
+    assert panel.rename_text() == ""
     assert panel.source_url_text() == ""
     assert panel.notes_text() == ""
     assert panel.tag_chips() == []
     assert not panel.is_form_enabled()
+
+
+def test_clear_panel_disconnects_chip_handlers(qapp, unit_with_tags, monkeypatch):
+    """测试稳定性1：clear_panel 后旧 chip 按钮信号已断开，点击不再触发操作。"""
+    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+    chips = [btn for _, btn in panel._chip_buttons]  # noqa: SLF001
+    assert chips
+
+    calls: list[tuple] = []
+    monkeypatch.setattr(panel, "_apply_tag_toggle", lambda *a, **kw: calls.append(a))
+
+    panel.clear_panel()
+    for btn in chips:
+        btn.click()
+
+    assert calls == []  # 旧 chip 按钮信号已断开，点击无副作用
+
+
+def test_clear_panel_drop_panel_handles_deferred_delete_safely(qapp, unit_with_tags):
+    """测试稳定性1 回归：clear_panel 后 panel 回收 + DeferredDelete 处理不原生崩溃。
+
+    修复前：chip 按钮 clicked lambda 闭包引用 self，deleteLater 后 panel 包装器回收，
+    事件循环处理 DeferredDelete 时在按钮析构途中触发 panel 二次删除（Windows
+    access violation / Fatal Python error: Aborted）。修复后应正常通过。
+    该测试若回归会直接终止整个 pytest 进程（原生崩溃无法以异常捕获）。
+    """
+    from PySide6.QtCore import QCoreApplication, QEvent
+
+    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+    panel.clear_panel()
+    del panel
+
+    # 处理挂起的 DeferredDelete（等价于后续测试中 QEventLoop.exec 的行为）
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 # === 标签 chip 操作 ===
@@ -360,12 +404,11 @@ def test_completer_loaded_on_load_unit(qapp, unit_with_tags):
 
 
 def test_save_writes_metadata(qapp, unit_with_tags):
-    """保存 → ContentService.update_metadata 写入 title/source_url/notes。"""
+    """保存 → ContentService.update_metadata 写入 source_url/notes（title 不再写）。"""
     content_service, tag_service, _, _, unit, *_ = unit_with_tags
     panel = MetadataPanel(content_service, tag_service)
     panel.load_unit(unit)
 
-    panel._title_edit.setText("新标题")  # noqa: SLF001
     panel._source_url_edit.setText("https://example.com/mod")  # noqa: SLF001
     panel._notes_edit.setPlainText("测试备注")  # noqa: SLF001
 
@@ -374,7 +417,6 @@ def test_save_writes_metadata(qapp, unit_with_tags):
     # 从数据库重新查询验证
     updated = content_service.get_by_id(unit.id)
     assert updated is not None
-    assert updated.title == "新标题"
     assert updated.source_url == "https://example.com/mod"
     assert updated.notes == "测试备注"
 
@@ -388,12 +430,12 @@ def test_save_emits_on_saved_signal(qapp, unit_with_tags):
     received: list[ContentUnit] = []
     panel.on_saved.connect(lambda u: received.append(u))
 
-    panel._title_edit.setText("信号测试")  # noqa: SLF001
+    panel._notes_edit.setPlainText("信号测试")  # noqa: SLF001
     panel.click_save_button()
 
     assert len(received) == 1
     assert received[0].id == unit.id
-    assert received[0].title == "信号测试"
+    assert received[0].notes == "信号测试"
 
 
 def test_save_attaches_new_tags(qapp, unit_with_tags):
@@ -437,12 +479,12 @@ def test_save_invalid_metadata_warns(qapp, unit_with_tags, monkeypatch):
     panel = MetadataPanel(content_service, tag_service)
     panel.load_unit(unit)
 
-    # 设置超长 title 触发 InvalidMetadataError（_TITLE_MAX_LENGTH = 200）
-    panel._title_edit.setText("x" * 300)  # noqa: SLF001
+    # 设置超长 source_url 触发 InvalidMetadataError（_URL_MAX_LENGTH = 2000）
+    panel._source_url_edit.setText("x" * 2001)  # noqa: SLF001
 
     warning_calls = []
     monkeypatch.setattr(
-        "app.metadata_panel.QMessageBox.warning", lambda *a, **kw: warning_calls.append(a)
+        "app.metadata_panel.QMessageBox.information", lambda *a, **kw: warning_calls.append(a)
     )
 
     received: list[ContentUnit] = []
@@ -465,7 +507,7 @@ def test_save_does_not_emit_on_failure(qapp, unit_with_tags, monkeypatch):
         raise InvalidMetadataError("模拟失败")
 
     monkeypatch.setattr(content_service, "update_metadata", _raise)
-    monkeypatch.setattr("app.metadata_panel.QMessageBox.warning", lambda *a, **kw: None)
+    monkeypatch.setattr("app.metadata_panel.QMessageBox.information", lambda *a, **kw: None)
 
     received: list[ContentUnit] = []
     panel.on_saved.connect(lambda u: received.append(u))
@@ -490,15 +532,32 @@ def test_pick_cover_button_emits_signal(qapp, unit_with_tags):
     assert received == [unit.id]
 
 
-def test_set_cover_path_updates_preview(qapp, unit_with_tags):
-    """set_cover_path 后 cover_path_text 返回新路径。"""
-    content_service, tag_service, _, _, unit, *_ = unit_with_tags
-    panel = MetadataPanel(content_service, tag_service)
+def test_apply_cover_persists_immediately(qapp, unit_with_tags):
+    """操作便捷性6：apply_cover 立即写库 + 更新表单 + 提交回调 + 信号。"""
+    content_service, tag_service, conn, _, unit, *_ = unit_with_tags
+    # 目录内再放一张候选图（apply_cover 会校验文件存在）
+    (Path(unit.path) / "preview.png").write_bytes(b"\x00" * 50)
+    commits: list[str] = []
+    saved_units: list[ContentUnit] = []
+    panel = MetadataPanel(
+        content_service,
+        tag_service,
+        commit_callback=lambda: commits.append("commit"),
+    )
+    panel.on_cover_saved.connect(lambda u: saved_units.append(u))
     panel.load_unit(unit)
     assert panel.cover_path_text() == "cover.jpg"  # mark 时自动录入
 
-    panel.set_cover_path("preview.png")
+    panel.apply_cover("preview.png")
+
+    assert content_service.get_by_id(unit.id).cover_path == "preview.png"
     assert panel.cover_path_text() == "preview.png"
+    assert commits == ["commit"]
+    assert [u.id for u in saved_units] == [unit.id]
+    assert saved_units[0].cover_path == "preview.png"
+    conn.commit()
+    row = conn.execute("SELECT cover_path FROM content_unit WHERE id = ?", (unit.id,)).fetchone()
+    assert row["cover_path"] == "preview.png"
 
 
 def test_cover_preview_uses_resizable_label(qapp, unit_with_tags):
@@ -517,16 +576,24 @@ def test_cover_preview_uses_resizable_label(qapp, unit_with_tags):
     assert isinstance(panel._cover_preview, _ResizableImageLabel)  # noqa: SLF001
 
 
-def test_clear_cover_button_resets_preview(qapp, unit_with_tags):
-    """点击「清除封面」→ cover_path_text 返回空字符串。"""
-    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+def test_clear_cover_button_persists_immediately(qapp, unit_with_tags):
+    """操作便捷性6：点击「清除封面」→ 立即清空数据库 + 表单。"""
+    content_service, tag_service, conn, _, unit, *_ = unit_with_tags
+    saved_units: list[ContentUnit] = []
     panel = MetadataPanel(content_service, tag_service)
+    panel.on_cover_saved.connect(lambda u: saved_units.append(u))
     panel.load_unit(unit)
-    panel.set_cover_path("cover.jpg")
     assert panel.cover_path_text() == "cover.jpg"
 
     panel._on_clear_cover_clicked()  # noqa: SLF001
+
     assert panel.cover_path_text() == ""
+    assert content_service.get_by_id(unit.id).cover_path is None
+    assert len(saved_units) == 1
+    assert saved_units[0].cover_path is None
+    conn.commit()
+    row = conn.execute("SELECT cover_path FROM content_unit WHERE id = ?", (unit.id,)).fetchone()
+    assert row["cover_path"] is None
 
 
 def test_save_persists_cover_path(qapp, unit_with_tags):
@@ -534,7 +601,7 @@ def test_save_persists_cover_path(qapp, unit_with_tags):
     content_service, tag_service, _, _, unit, *_ = unit_with_tags
     panel = MetadataPanel(content_service, tag_service)
     panel.load_unit(unit)
-    panel.set_cover_path("cover.jpg")
+    panel.apply_cover("cover.jpg")
 
     panel.click_save_button()
 
@@ -549,7 +616,7 @@ def test_save_clears_cover_when_form_empty(qapp, unit_with_tags):
     # 先设置一个封面并保存
     panel = MetadataPanel(content_service, tag_service)
     panel.load_unit(unit)
-    panel.set_cover_path("cover.jpg")
+    panel.apply_cover("cover.jpg")
     panel.click_save_button()
     assert content_service.get_by_id(unit.id).cover_path == "cover.jpg"
 
@@ -565,23 +632,119 @@ def test_save_clears_cover_when_form_empty(qapp, unit_with_tags):
     assert final.cover_path is None
 
 
-# === 中文支持 ===
+def test_apply_cover_keeps_unsaved_form_edits(qapp, unit_with_tags):
+    """操作便捷性6：封面即时保存不重载表单，未保存的来源/备注编辑保留。"""
+    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+    panel._notes_edit.setPlainText("未保存的备注")  # noqa: SLF001
+
+    panel.apply_cover("cover.jpg")
+
+    assert panel.notes_text() == "未保存的备注"
+    # 数据库备注未被封面保存改动
+    assert content_service.get_by_id(unit.id).notes is None
 
 
-def test_save_chinese_metadata(qapp, unit_with_tags):
-    """保存中文标题、URL、备注 → 正确写入。"""
+def test_apply_cover_invalid_path_fails_without_changes(qapp, unit_with_tags, monkeypatch):
+    """操作便捷性6：封面路径不存在 → 弹提示、不写库、表单不变。"""
+    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+    monkeypatch.setattr("app.metadata_panel.QMessageBox.information", lambda *a, **kw: None)
+    saved_units: list[ContentUnit] = []
+    panel = MetadataPanel(content_service, tag_service)
+    panel.on_cover_saved.connect(lambda u: saved_units.append(u))
+    panel.load_unit(unit)
+
+    panel.apply_cover("missing.png")
+
+    assert content_service.get_by_id(unit.id).cover_path == "cover.jpg"
+    assert panel.cover_path_text() == "cover.jpg"
+    assert saved_units == []
+
+
+# === 重命名栏（UI合理性13） ===
+
+
+def test_rename_field_shows_real_filename(qapp, unit_with_tags):
+    """重命名栏显示真实文件名（path basename），而非 title。"""
     content_service, tag_service, _, _, unit, *_ = unit_with_tags
     panel = MetadataPanel(content_service, tag_service)
     panel.load_unit(unit)
 
-    panel._title_edit.setText("寒霜之心-汉化")  # noqa: SLF001
+    # unit 对应文件夹 MyMod，重命名栏显示文件名
+    assert panel.rename_text() == "MyMod"
+
+
+def test_rename_return_emits_request(qapp, unit_with_tags):
+    """重命名栏回车 → 发射 rename_requested(unit_id, new_name)。"""
+    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
+    received: list[tuple[str, str]] = []
+    panel.rename_requested.connect(lambda unit_id, name: received.append((unit_id, name)))
+
+    panel._rename_edit.setText("NewName")  # noqa: SLF001
+    panel._on_rename_return()  # noqa: SLF001
+
+    assert received == [(unit.id, "NewName")]
+
+
+def test_rename_return_ignores_empty_and_unchanged(qapp, unit_with_tags):
+    """重命名栏回车：空名称 / 名称未变化 → 不发射请求。"""
+    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
+    received: list[tuple[str, str]] = []
+    panel.rename_requested.connect(lambda unit_id, name: received.append((unit_id, name)))
+
+    panel._rename_edit.setText("")  # noqa: SLF001
+    panel._on_rename_return()  # noqa: SLF001
+
+    # 与当前文件名相同 → 不发射
+    panel._rename_edit.setText("MyMod")  # noqa: SLF001
+    panel._on_rename_return()  # noqa: SLF001
+
+    assert received == []
+
+
+def test_apply_renamed_unit_updates_name_only(qapp, unit_with_tags):
+    """重命名成功后 apply_renamed_unit：更新文件名，保留未保存编辑。"""
+    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+    panel._notes_edit.setPlainText("未保存的备注")  # noqa: SLF001
+
+    renamed = ContentUnit(
+        id=unit.id,
+        path=str(Path(unit.path).parent / "Renamed"),
+        content_type=unit.content_type,
+        created_at=unit.created_at,
+        updated_at=unit.updated_at,
+    )
+    panel.apply_renamed_unit(renamed)
+
+    assert panel.rename_text() == "Renamed"
+    assert panel.notes_text() == "未保存的备注"
+    assert panel.current_unit().path == renamed.path
+
+
+# === 中文支持 ===
+
+
+def test_save_chinese_metadata(qapp, unit_with_tags):
+    """保存中文 URL、备注 → 正确写入（title 不再写）。"""
+    content_service, tag_service, _, _, unit, *_ = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
     panel._notes_edit.setPlainText("这是一个中文备注")  # noqa: SLF001
 
     panel.click_save_button()
 
     updated = content_service.get_by_id(unit.id)
     assert updated is not None
-    assert updated.title == "寒霜之心-汉化"
     assert updated.notes == "这是一个中文备注"
 
 
@@ -595,23 +758,18 @@ def test_add_chinese_tag_chip(qapp, unit_with_tags):
     assert tag2.name in panel.tag_chips()
 
 
-# === Stage 4.5 M18：标签 attach 失败路径测试 ===
+# === 操作便捷性4：标签即时保存失败路径（原 M18 保存期失败测试改写） ===
 
 
-def test_save_tag_attach_failure_emits_on_save_failed(qapp, unit_with_tags, monkeypatch):
-    """标签 attach 抛 TagNotFoundError → 发射 on_save_failed，不发射 on_saved。
-
-    M18 修复：标签关联失败时，metadata 已写入但标签关联失败，应通知
-    MainWindow rollback 事务（避免"部分成功"状态被意外提交）。
-    """
+def test_immediate_tag_attach_failure_shows_error_and_keeps_state(
+    qapp, unit_with_tags, monkeypatch
+):
+    """即时添加标签 attach 抛错 → 提示错误，chip 不添加，on_saved/on_save_failed 不发射。"""
     from application.errors import TagNotFoundError
 
-    content_service, tag_service, conn, _, unit, _, _, _, tag2 = unit_with_tags
+    content_service, tag_service, _, _, unit, _, _, _, tag2 = unit_with_tags
     panel = MetadataPanel(content_service, tag_service)
     panel.load_unit(unit)
-    # 添加 tag2 chip（让 to_add 非空，触发 attach_tag_to_unit 调用）
-    panel.add_tag_via_input(tag2.name)
-    assert tag2.name in panel.tag_chips()
 
     # 模拟 attach_tag_to_unit 抛 TagNotFoundError
     def _raise_tag_not_found(*args, **kwargs):
@@ -621,7 +779,7 @@ def test_save_tag_attach_failure_emits_on_save_failed(qapp, unit_with_tags, monk
     # 抑制 QMessageBox 模态对话框
     warning_calls = []
     monkeypatch.setattr(
-        "app.metadata_panel.QMessageBox.warning", lambda *a, **kw: warning_calls.append(a)
+        "app.metadata_panel.QMessageBox.information", lambda *a, **kw: warning_calls.append(a)
     )
 
     saved: list[ContentUnit] = []
@@ -629,47 +787,358 @@ def test_save_tag_attach_failure_emits_on_save_failed(qapp, unit_with_tags, monk
     panel.on_saved.connect(lambda u: saved.append(u))
     panel.on_save_failed.connect(lambda msg: failed.append(msg))
 
-    panel.click_save_button()
+    panel.add_tag_via_input(tag2.name)
 
-    # on_saved 不应发射
-    assert saved == []
-    # on_save_failed 应发射，包含错误消息
-    assert len(failed) == 1
-    assert "标签不存在" in failed[0]
-    # 用户应看到错误提示
+    # 错误提示出现
     assert len(warning_calls) == 1
+    # chip 不添加（本地状态未变）
+    assert tag2.name not in panel.tag_chips()
+    # on_saved / on_save_failed 均不发射（即时路径不经过保存按钮）
+    assert saved == []
+    assert failed == []
 
 
-def test_save_tag_attach_failure_does_not_persist(qapp, unit_with_tags, monkeypatch):
-    """标签 attach 失败 → on_save_failed 通知 MainWindow rollback → metadata 未持久化。
-
-    验证事务一致性：MainWindow 收到 on_save_failed 后调用 rollback，
-    update_metadata 的写入应被回滚（title 未变更）。
-    """
+def test_immediate_tag_attach_failure_does_not_attach(qapp, unit_with_tags, monkeypatch):
+    """即时添加标签 attach 失败 → 数据库无该关联写入。"""
     from application.errors import TagNotFoundError
 
-    content_service, tag_service, conn, content_repo, unit, _, _, _, tag2 = unit_with_tags
+    content_service, tag_service, conn, _, unit, _, _, _, tag2 = unit_with_tags
     panel = MetadataPanel(content_service, tag_service)
     panel.load_unit(unit)
-    panel.add_tag_via_input(tag2.name)
-    # 修改 title（触发 update_metadata 写入）
-    panel._title_edit.setText("新标题-应被回滚")  # noqa: SLF001
 
     # 模拟 attach_tag_to_unit 抛 TagNotFoundError
     def _raise_tag_not_found(*args, **kwargs):
         raise TagNotFoundError("标签不存在（模拟）")
 
     monkeypatch.setattr(tag_service, "attach_tag_to_unit", _raise_tag_not_found)
-    monkeypatch.setattr("app.metadata_panel.QMessageBox.warning", lambda *a, **kw: None)
+    monkeypatch.setattr("app.metadata_panel.QMessageBox.information", lambda *a, **kw: None)
 
-    # 模拟 MainWindow 的 on_save_failed 回调：调用 conn.rollback()
-    panel.on_save_failed.connect(lambda msg: conn.rollback())
+    panel.add_tag_via_input(tag2.name)
 
-    panel.click_save_button()
+    # 数据库无该标签关联（即时保存失败不写库）
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM content_unit_tag WHERE content_unit_id = ? AND tag_id = ?",
+        (unit.id, tag2.id),
+    ).fetchone()
+    assert rows[0] == 0
 
-    # 验证 metadata 未持久化（被 rollback）
-    # 重新从数据库读取 unit
-    persisted_unit = content_repo.get_by_id(unit.id)
-    assert persisted_unit is not None
-    # title 应保持原值（未被修改为"新标题-应被回滚"）
-    assert persisted_unit.title != "新标题-应被回滚"
+
+# === UI合理性8 / 操作便捷性4：分组预选 / 最近标签 / 即时保存（2026-08-02） ===
+
+
+def _make_recent_tags(tmp_path: Path, tag_ids: list[str]) -> RecentTags:
+    """构造指向临时 ini 的 RecentTags 并预置记录。"""
+    recent = RecentTags(QSettings(str(tmp_path / "tags.ini"), QSettings.Format.IniFormat))
+    for tag_id in tag_ids:
+        recent.record(tag_id)
+    return recent
+
+
+def test_preset_list_grouped_by_category(qapp, unit_with_tags):
+    """UI合理性8：预选标签按分类分组显示（分组头 + 组内标签）。"""
+    content_service, tag_service, _, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
+    # 分组头存在（服装护甲组为空——tag1 已关联，该组不显示；状态组显示 tag2）
+    assert panel.preset_group_names() == [cat2.name]
+    # 组内标签按名称显示；已关联的 tag1 不显示
+    assert panel.preset_tag_names() == [tag2.name]
+
+
+def test_preset_group_collapse_toggle(qapp, unit_with_tags):
+    """UI合理性8：点击分组头折叠/展开组内标签。"""
+    content_service, tag_service, _, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
+    # 初始展开
+    assert not panel.is_preset_group_collapsed(cat2.id)
+    flow = panel._preset_groups[cat2.id]  # noqa: SLF001
+    assert not flow.isHidden()
+
+    panel.click_preset_group(cat2.name)
+    assert panel.is_preset_group_collapsed(cat2.id)
+    assert flow.isHidden()
+
+    panel.click_preset_group(cat2.name)
+    assert not panel.is_preset_group_collapsed(cat2.id)
+    assert not flow.isHidden()
+
+
+def test_immediate_tag_add_persists_and_commits(qapp, unit_with_tags, tmp_path):
+    """操作便捷性4：点击预选标签立即写库并触发提交回调。"""
+    content_service, tag_service, conn, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    commits: list[str] = []
+    panel = MetadataPanel(
+        content_service,
+        tag_service,
+        commit_callback=lambda: commits.append("commit"),
+    )
+    panel.load_unit(unit)
+
+    panel.click_preset_tag(tag2.name)
+
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM content_unit_tag WHERE content_unit_id = ? AND tag_id = ?",
+        (unit.id, tag2.id),
+    ).fetchone()
+    assert rows[0] == 1
+    assert commits == ["commit"]
+    assert tag2.name in panel.tag_chips()
+
+
+def test_immediate_tag_remove_persists(qapp, unit_with_tags):
+    """操作便捷性4：点击 chip 立即 detach 并写库。"""
+    content_service, tag_service, conn, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
+    panel.click_tag_chip(tag1.name)
+
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM content_unit_tag WHERE content_unit_id = ? AND tag_id = ?",
+        (unit.id, tag1.id),
+    ).fetchone()
+    assert rows[0] == 0
+    assert tag1.name not in panel.tag_chips()
+
+
+def test_recent_tags_area_shows_and_adds(qapp, unit_with_tags, tmp_path):
+    """UI合理性8：最近标签区域显示并可点击即时添加。"""
+    content_service, tag_service, conn, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    recent = _make_recent_tags(tmp_path, [tag2.id])
+    panel = MetadataPanel(content_service, tag_service, recent_tags=recent)
+    panel.load_unit(unit)
+
+    assert panel.recent_tag_names() == [tag2.name]
+
+    panel.click_recent_tag(tag2.name)
+
+    rows = conn.execute(
+        "SELECT COUNT(*) FROM content_unit_tag WHERE content_unit_id = ? AND tag_id = ?",
+        (unit.id, tag2.id),
+    ).fetchone()
+    assert rows[0] == 1
+    assert tag2.name in panel.tag_chips()
+
+
+def test_recent_tag_already_in_chip_disabled(qapp, unit_with_tags, tmp_path):
+    """UI合理性8：已在 chip 的最近标签灰显不可点。"""
+    content_service, tag_service, _, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    recent = _make_recent_tags(tmp_path, [tag1.id])
+    panel = MetadataPanel(content_service, tag_service, recent_tags=recent)
+    panel.load_unit(unit)
+
+    assert tag1.name in panel.recent_tag_names()
+    assert not panel.is_recent_tag_enabled(tag1.name)
+
+
+def test_recent_tag_button_uses_category_color(qapp, unit_with_tags, tmp_path):
+    """验收反馈（2026-08-04）：最近标签按钮与预选/ chip 一致使用分类色。"""
+    from app.tag_colors import category_color_hex  # noqa: PLC0415
+
+    content_service, tag_service, _, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    recent = _make_recent_tags(tmp_path, [tag2.id])
+    panel = MetadataPanel(content_service, tag_service, recent_tags=recent)
+    panel.load_unit(unit)
+
+    style = panel.recent_tag_style(tag2.name)
+    assert "background:" in style
+    assert category_color_hex(cat2.color_hex) in style
+
+
+def test_immediate_tag_add_records_recent(qapp, unit_with_tags, tmp_path):
+    """操作便捷性4：即时添加标签后记录到最近标签。"""
+    content_service, tag_service, _, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    recent = _make_recent_tags(tmp_path, [])
+    panel = MetadataPanel(content_service, tag_service, recent_tags=recent)
+    panel.load_unit(unit)
+
+    panel.click_preset_tag(tag2.name)
+
+    assert recent.list_recent() == [tag2.id]
+
+
+# === 操作合理性2：图片直接预览（元数据面板） ===
+
+
+def _make_real_image(path: Path, size: tuple[int, int] = (64, 40)) -> Path:
+    """生成一张真实可解码的 PNG（供图片预览 / 封面优先测试）。"""
+    from PIL import Image as PILImage
+
+    img = PILImage.new("RGB", size, (200, 60, 60))
+    img.save(path)
+    return path
+
+
+def test_show_image_preview_displays_original(qapp, services, tmp_path):
+    """未标记图片 → 预览模式显示原图、文件名/路径，隐藏编辑表单。"""
+    content_service, tag_service, _, _ = services
+    img = _make_real_image(tmp_path / "截图.png")
+    panel = MetadataPanel(content_service, tag_service)
+
+    panel.show_image_preview(str(img))
+
+    assert panel.is_image_preview_visible()
+    assert panel.current_unit() is None
+    assert panel.preview_name_text() == "截图.png"
+    assert panel.preview_path_text() == str(img)
+    assert panel.preview_image_pixmap() is not None
+    assert not panel.is_form_enabled()
+    # 编辑表单已隐藏
+    assert panel._rename_edit.isHidden()  # noqa: SLF001
+    assert panel._save_button.isHidden()  # noqa: SLF001
+
+
+def test_show_image_preview_invalid_image_shows_placeholder(qapp, services, tmp_path):
+    """损坏/无法解码的图片 → 预览模式激活但显示占位边框（不崩溃）。"""
+    content_service, tag_service, _, _ = services
+    img = tmp_path / "broken.jpg"
+    img.write_bytes(b"\x00" * 50)
+    panel = MetadataPanel(content_service, tag_service)
+
+    panel.show_image_preview(str(img))
+
+    assert panel.is_image_preview_visible()
+    assert panel.preview_image_pixmap() is None
+
+
+def test_clear_panel_exits_image_preview(qapp, services, tmp_path):
+    """clear_panel → 退出预览模式，恢复表单与占位提示。"""
+    content_service, tag_service, _, _ = services
+    img = _make_real_image(tmp_path / "a.png")
+    panel = MetadataPanel(content_service, tag_service)
+    panel.show_image_preview(str(img))
+    assert panel.is_image_preview_visible()
+
+    panel.clear_panel()
+
+    assert not panel.is_image_preview_visible()
+    assert not panel._rename_edit.isHidden()  # noqa: SLF001
+    assert not panel._hint_label.isHidden()  # noqa: SLF001
+
+
+def test_load_unit_exits_image_preview(qapp, unit_with_tags):
+    """从预览模式切回内容单元 → 退出预览并正常加载表单。"""
+    content_service, tag_service, _, _, unit, _, _, _, _ = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.show_image_preview(str(Path(unit.path)))
+
+    panel.load_unit(unit)
+
+    assert not panel.is_image_preview_visible()
+    assert panel.current_unit() is not None
+    assert panel.is_form_enabled()
+    assert not panel._rename_edit.isHidden()  # noqa: SLF001
+
+
+def test_marked_image_unit_without_cover_previews_file_itself(qapp, services, tmp_path):
+    """已标记图片文件单元无封面 → 封面预览区直接显示文件本身原图。"""
+    content_service, tag_service, conn, _ = services
+    img = _make_real_image(tmp_path / "截图.png", (64, 40))
+    unit = content_service.mark_as_content_unit(img)
+    conn.commit()
+    assert unit.cover_path is None
+
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
+    pixmap = panel.cover_preview_pixmap()
+    assert pixmap is not None
+    assert (pixmap.width(), pixmap.height()) == (64, 40)
+    assert panel.cover_path_text() == ""  # 无封面：cover_path_text 约定返回空串
+
+
+def test_marked_folder_unit_cover_takes_priority(qapp, services, tmp_path):
+    """封面优先：文件夹单元设置了封面时，预览区显示封面而非单元本身。"""
+    content_service, tag_service, conn, _ = services
+    folder = tmp_path / "Mod"
+    folder.mkdir()
+    _make_real_image(folder / "a.png", (64, 40))
+    _make_real_image(folder / "b.png", (40, 64))
+    unit = content_service.mark_as_content_unit(folder)
+    conn.commit()
+    assert unit.cover_path == "a.png"  # 自动封面取按名排序第一张
+
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
+    pixmap = panel.cover_preview_pixmap()
+    assert pixmap is not None
+    assert pixmap.width() > pixmap.height()  # 横图 a.png，封面优先
+    assert panel.cover_path_text() == "a.png"
+
+
+def test_panel_layout_packs_to_top(qapp, services):
+    """面板布局底部保留竖直 stretch：剩余高度由伸缩项吸收，元素自动靠顶。
+
+    操作合理性2 验收反馈（2026-08-03）：此前无底部 stretch，Qt 把多余高度
+    按比例分摊到各控件，导致表单/图片预览出现大量空行。
+    """
+    content_service, tag_service, _, _ = services
+    panel = MetadataPanel(content_service, tag_service)
+    layout = panel.layout()
+    assert isinstance(layout, QVBoxLayout)
+    last_item = layout.itemAt(layout.count() - 1)
+    assert last_item is not None and last_item.spacerItem() is not None
+    assert (last_item.spacerItem().expandingDirections() & Qt.Orientation.Vertical) != 0
+
+
+def test_preset_area_default_height_matches_constant(qapp, services):
+    """已有标签区默认高度恢复为常量值（不因底部 stretch 被绕过）。"""
+    content_service, tag_service, _, _ = services
+    panel = MetadataPanel(content_service, tag_service)
+
+    assert (
+        panel._preset_scroll.sizeHint().height()  # noqa: SLF001
+        == ui.METADATA_PANEL_PRESET_SCROLL_HEIGHT
+    )
+
+
+def test_preset_area_height_draggable_and_clamped(qapp, services):
+    """已有标签区高度可拖动调整，并受 MIN/MAX 截断。"""
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+
+    content_service, tag_service, _, _ = services
+    panel = MetadataPanel(content_service, tag_service)
+    scroll = panel._preset_scroll  # noqa: SLF001
+    handle = panel._preset_resize_handle  # noqa: SLF001
+
+    # 程序化路径：截断到范围
+    scroll.set_preferred_height(999)
+    assert scroll.sizeHint().height() == ui.METADATA_PANEL_PRESET_SCROLL_HEIGHT
+    scroll.set_preferred_height(1)
+    assert scroll.sizeHint().height() == ui.METADATA_PANEL_PRESET_SCROLL_MIN_HEIGHT
+
+    # 鼠标拖拽：按下 → 上移 120px → 释放
+    scroll.set_preferred_height(ui.METADATA_PANEL_PRESET_SCROLL_HEIGHT)
+    scroll.resize(200, ui.METADATA_PANEL_PRESET_SCROLL_HEIGHT)
+    QTest.mousePress(
+        handle, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(10, 3)
+    )
+    QTest.mouseMove(handle, QPoint(10, 3 - 120))
+    QTest.mouseRelease(
+        handle, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(10, 3 - 120)
+    )
+    assert scroll.sizeHint().height() == ui.METADATA_PANEL_PRESET_SCROLL_HEIGHT - 120
+
+
+def test_chip_and_preset_buttons_colored_by_category(qapp, unit_with_tags):
+    """BugFix2：chip/预选按钮背景与边框统一分类色；分组头不着色。"""
+    content_service, tag_service, _, _, unit, cat1, cat2, tag1, tag2 = unit_with_tags
+    panel = MetadataPanel(content_service, tag_service)
+    panel.load_unit(unit)
+
+    # chip：tag1 属于 cat1
+    chip_btn = next(btn for t, btn in panel._chip_buttons if t.id == tag1.id)  # noqa: SLF001
+    assert category_color_hex(cat1.color_hex) in chip_btn.styleSheet()
+
+    # 预选标签按钮：tag2 属于 cat2
+    tag2_btn = next(b for b in panel._preset_buttons if b.text() == tag2.name)  # noqa: SLF001
+    assert category_color_hex(cat2.color_hex) in tag2_btn.styleSheet()
+
+    # 分组头不着色（验收反馈：分类与标签都上色太杂乱）
+    header = next(b for b in panel._preset_content.findChildren(QPushButton) if "状态" in b.text())  # noqa: SLF001
+    assert category_color_hex(cat2.color_hex) not in header.styleSheet()

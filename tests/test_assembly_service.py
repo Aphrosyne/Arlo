@@ -24,8 +24,8 @@ from application.errors import (
     ContentUnitNotFoundError,
     InvalidContentUnitPathError,
 )
+from application.file_operation_service import FileOperationService
 from infrastructure.db import get_connection, init_db
-from infrastructure.file_operation_service import FileOperationService
 from infrastructure.folder_cache_sync_helper import FolderCacheSyncHelper
 from infrastructure.repositories.content_unit import ContentUnitRepository
 from infrastructure.repositories.folder_cache import FolderCacheRepository
@@ -148,6 +148,66 @@ class TestListModGroupFiles:
         assert entries == []
 
 
+# === list_folder_files（UX 重构 Phase 1 Task 2：文件夹透视器） ===
+
+
+class TestListFolderFiles:
+    def test_lists_files_in_plain_folder(self, assembly_env, tmp_path: Path) -> None:
+        """列出任意文件夹内所有文件（无需 ContentUnit 关联）。"""
+        svc, *_ = assembly_env
+        folder = tmp_path / "PlainFolder"
+        folder.mkdir()
+        (folder / "readme.txt").write_text("hi", encoding="utf-8")
+        (folder / "data.zip").write_bytes(b"\x00" * 10)
+
+        entries = svc.list_folder_files(folder)
+
+        names = sorted(e.name for e in entries)
+        assert names == ["data.zip", "readme.txt"]
+
+    def test_lists_subdirectories(self, assembly_env, tmp_path: Path) -> None:
+        """列出文件夹内的子目录。"""
+        svc, *_ = assembly_env
+        folder = tmp_path / "PlainFolder"
+        folder.mkdir()
+        (folder / "子目录").mkdir()
+
+        entries = svc.list_folder_files(folder)
+
+        subdirs = [e for e in entries if e.is_dir]
+        assert len(subdirs) == 1
+        assert subdirs[0].name == "子目录"
+
+    def test_folders_sorted_before_files(self, assembly_env, tmp_path: Path) -> None:
+        """文件夹排在文件之前。"""
+        svc, *_ = assembly_env
+        folder = tmp_path / "PlainFolder"
+        folder.mkdir()
+        (folder / "zzz_file.txt").write_bytes(b"data")
+        (folder / "aaa_folder").mkdir()
+
+        entries = svc.list_folder_files(folder)
+
+        assert entries[0].is_dir
+        assert entries[0].name == "aaa_folder"
+
+    def test_path_not_directory_returns_empty(self, assembly_env, tmp_path: Path) -> None:
+        """路径不是目录返回空列表。"""
+        svc, *_ = assembly_env
+        file_path = tmp_path / "not_a_dir.7z"
+        file_path.write_bytes(b"data")
+
+        entries = svc.list_folder_files(file_path)
+
+        assert entries == []
+
+    def test_nonexistent_path_returns_empty(self, assembly_env, tmp_path: Path) -> None:
+        """路径不存在返回空列表（不抛异常）。"""
+        svc, *_ = assembly_env
+        entries = svc.list_folder_files(tmp_path / "nonexistent")
+        assert entries == []
+
+
 # === add_file ===
 
 
@@ -229,41 +289,78 @@ class TestAddFile:
             svc.add_file("nonexistent-id", src)
 
 
-# === remove_file ===
+# === add_file_by_folder_path ===
 
 
-class TestRemoveFile:
-    def test_moves_file_back_to_staging_root(self, assembly_env) -> None:
-        """从 Mod 组移除文件 → 移回暂存区根目录（不保留原子目录结构）。"""
-        svc, _, _, staging, mod_folder, unit = assembly_env
-        # Mod 组内放入文件
-        target = mod_folder / "汉化.zip"
-        target.write_bytes(b"localization")
+class TestAddFileByFolderPath:
+    """UX 重构 Phase 1 Task 4：按文件夹路径添加文件（不依赖 ContentUnit）。"""
 
-        result = svc.remove_file(unit.id, "汉化.zip", staging)
+    def test_moves_file_to_folder(self, assembly_env) -> None:
+        """按路径移动文件到目标文件夹（非内容单元文件夹也可用）。"""
+        svc, _, _, staging, _, _ = assembly_env
+        # 目标文件夹：不标记为内容单元的普通文件夹
+        target_folder = staging / "分类目录"
+        target_folder.mkdir()
+        src = staging / "汉化包.zip"
+        src.write_bytes(b"localization")
 
-        # 文件已从 Mod 组移走
-        assert not target.exists()
-        # 文件移回暂存区根目录
-        assert (staging / "汉化.zip").is_file()
-        assert result == staging / "汉化.zip"
+        entry = svc.add_file_by_folder_path(target_folder, src)
 
-    def test_conflict_when_staging_has_same_name(self, assembly_env) -> None:
-        """暂存区根目录已存在同名文件抛 ConflictError。"""
-        svc, _, _, staging, mod_folder, unit = assembly_env
-        target = mod_folder / "汉化.zip"
-        target.write_bytes(b"mod-copy")
-        # 暂存区已存在同名文件
-        (staging / "汉化.zip").write_bytes(b"staging-copy")
+        assert not src.exists()
+        target = target_folder / "汉化包.zip"
+        assert target.is_file()
+        assert target.read_bytes() == b"localization"
+        assert entry.name == "汉化包.zip"
+        assert entry.path == str(target)
+
+    def test_preserves_original_filename(self, assembly_env) -> None:
+        """不自动重命名（与 add_file 行为一致）。"""
+        svc, _, _, staging, _, _ = assembly_env
+        target_folder = staging / "目标"
+        target_folder.mkdir()
+        src = staging / "preview_v2.png"
+        src.write_bytes(b"img")
+
+        svc.add_file_by_folder_path(target_folder, src)
+
+        assert (target_folder / "preview_v2.png").is_file()
+
+    def test_conflict_when_target_exists(self, assembly_env) -> None:
+        """目标文件夹已存在同名文件抛 ConflictError。"""
+        svc, _, _, staging, _, _ = assembly_env
+        target_folder = staging / "目标"
+        target_folder.mkdir()
+        (target_folder / "已存在.txt").write_bytes(b"old")
+        src = staging / "已存在.txt"
+        src.write_bytes(b"new")
 
         with pytest.raises(ConflictError):
-            svc.remove_file(unit.id, "汉化.zip", staging)
+            svc.add_file_by_folder_path(target_folder, src)
 
-    def test_unit_not_exist_raises(self, assembly_env) -> None:
-        """ContentUnit 不存在抛 ContentUnitNotFoundError。"""
+    def test_works_with_content_unit_folder(self, assembly_env) -> None:
+        """对内容单元文件夹同样适用（与 add_file 等价）。"""
+        svc, _, _, staging, mod_folder, unit = assembly_env
+        src = staging / "补充文件.txt"
+        src.write_bytes(b"extra")
+
+        entry = svc.add_file_by_folder_path(mod_folder, src)
+
+        assert not src.exists()
+        target = mod_folder / "补充文件.txt"
+        assert target.is_file()
+        assert entry.path == str(target)
+
+    def test_chinese_path(self, assembly_env) -> None:
+        """中文路径 + 中文文件名。"""
         svc, _, _, staging, _, _ = assembly_env
-        with pytest.raises(ContentUnitNotFoundError):
-            svc.remove_file("nonexistent-id", "file.zip", staging)
+        target_folder = staging / "中文文件夹"
+        target_folder.mkdir()
+        src = staging / "中文名文件.7z"
+        src.write_bytes(b"data")
+
+        svc.add_file_by_folder_path(target_folder, src)
+
+        assert (target_folder / "中文名文件.7z").is_file()
 
 
 # === rename_as_cover ===
@@ -367,6 +464,75 @@ class TestRenameAsCover:
 
         with pytest.raises(ContentUnitNotFoundError):
             svc.rename_as_cover("nonexistent-id", img)
+
+
+# === rename_as_cover_by_path（UX 重构 Phase 1 Task 2：文件夹透视器） ===
+
+
+class TestRenameAsCoverByPath:
+    def test_renames_by_folder_name(self, assembly_env, tmp_path: Path) -> None:
+        """按文件夹名重命名图片（无需 ContentUnit 关联）。"""
+        svc, *_ = assembly_env
+        folder = tmp_path / "PlainMod"
+        folder.mkdir()
+        img = folder / "preview.png"
+        img.write_bytes(b"img-data")
+
+        result = svc.rename_as_cover_by_path(folder, img)
+
+        assert result == folder / "PlainMod.png"
+        assert result.is_file()
+        assert not img.exists()
+
+    def test_multiple_images_get_suffix(self, assembly_env, tmp_path: Path) -> None:
+        """多张图片：_2、_3 后缀。"""
+        svc, *_ = assembly_env
+        folder = tmp_path / "PlainMod"
+        folder.mkdir()
+        img1 = folder / "p1.png"
+        img1.write_bytes(b"1")
+        img2 = folder / "p2.png"
+        img2.write_bytes(b"2")
+
+        r1 = svc.rename_as_cover_by_path(folder, img1)
+        r2 = svc.rename_as_cover_by_path(folder, img2)
+
+        assert r1.name == "PlainMod.png"
+        assert r2.name == "PlainMod_2.png"
+
+    def test_non_image_raises(self, assembly_env, tmp_path: Path) -> None:
+        """非图片文件抛 InvalidContentUnitPathError。"""
+        svc, *_ = assembly_env
+        folder = tmp_path / "PlainMod"
+        folder.mkdir()
+        txt = folder / "readme.txt"
+        txt.write_bytes(b"text")
+
+        with pytest.raises(InvalidContentUnitPathError):
+            svc.rename_as_cover_by_path(folder, txt)
+
+    def test_image_outside_folder_raises(self, assembly_env, tmp_path: Path) -> None:
+        """图片不在文件夹内抛 InvalidContentUnitPathError。"""
+        svc, *_ = assembly_env
+        folder = tmp_path / "PlainMod"
+        folder.mkdir()
+        outside = tmp_path / "outside.png"
+        outside.write_bytes(b"img")
+
+        with pytest.raises(InvalidContentUnitPathError):
+            svc.rename_as_cover_by_path(folder, outside)
+
+    def test_idempotent_when_already_renamed(self, assembly_env, tmp_path: Path) -> None:
+        """图片已叫 {文件夹名}.ext 时幂等返回。"""
+        svc, *_ = assembly_env
+        folder = tmp_path / "PlainMod"
+        folder.mkdir()
+        img = folder / "PlainMod.png"
+        img.write_bytes(b"img")
+
+        result = svc.rename_as_cover_by_path(folder, img)
+
+        assert result == img
 
 
 # === is_image_file ===

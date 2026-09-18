@@ -32,8 +32,6 @@ class TestContentUnit:
         assert unit.id == "u-1"
         assert unit.path == "/mods/armor"
         assert unit.content_type == "mod"
-        assert unit.is_marked is True
-        assert unit.title is None
 
     def test_create_with_all_fields(self) -> None:
         unit = ContentUnit(
@@ -41,15 +39,13 @@ class TestContentUnit:
             path="/mods/weapon",
             created_at="2026-07-12T00:00:00Z",
             updated_at="2026-07-12T00:00:00Z",
-            title="龙之剑",
             content_type="mod",
             source_url="https://example.com",
             cover_path="/mods/weapon/cover.png",
-            is_marked=True,
             notes="测试备注",
         )
-        assert unit.title == "龙之剑"
-        assert unit.is_marked is True
+        assert unit.source_url == "https://example.com"
+        assert unit.notes == "测试备注"
 
     def test_empty_id_raises(self) -> None:
         with pytest.raises(ValueError, match="id"):
@@ -76,22 +72,7 @@ class TestContentUnit:
         )
         assert "护甲" in unit.path
 
-    # === M13 / v11：is_marked / content_type 取值范围校验 ===
-
-    def test_default_is_marked_true(self) -> None:
-        unit = ContentUnit(id="u", path="/x", created_at="t", updated_at="t")
-        assert unit.is_marked is True
-
-    def test_is_marked_false(self) -> None:
-        unit = ContentUnit(id="u", path="/x", created_at="t", updated_at="t", is_marked=False)
-        assert unit.is_marked is False
-
-    def test_invalid_is_marked_type_raises(self) -> None:
-        """v11：is_marked 必须是 bool。"""
-        with pytest.raises(ValueError, match="is_marked"):
-            ContentUnit(  # type: ignore[arg-type]
-                id="u", path="/x", created_at="t", updated_at="t", is_marked="true"
-            )
+    # === M13：content_type 取值范围校验 ===
 
     def test_invalid_content_type_raises(self) -> None:
         with pytest.raises(ValueError, match="content_type"):
@@ -106,7 +87,7 @@ class TestContentUnit:
 class TestTagCategory:
     def test_create_with_defaults(self) -> None:
         cat = TagCategory(id="c-1", name="类型")
-        assert cat.color_hue == 0
+        assert cat.color_hex == "#D61A1A"
 
     def test_empty_id_raises(self) -> None:
         with pytest.raises(ValueError, match="id"):
@@ -116,17 +97,20 @@ class TestTagCategory:
         with pytest.raises(ValueError, match="name"):
             TagCategory(id="c", name="")
 
-    def test_color_hue_below_range_raises(self) -> None:
-        with pytest.raises(ValueError, match="color_hue"):
-            TagCategory(id="c", name="x", color_hue=-1)
+    def test_color_hex_valid(self) -> None:
+        TagCategory(id="c", name="x", color_hex="#1A78D6")
 
-    def test_color_hue_above_range_raises(self) -> None:
-        with pytest.raises(ValueError, match="color_hue"):
-            TagCategory(id="c", name="x", color_hue=361)
+    def test_color_hex_lowercase_raises(self) -> None:
+        with pytest.raises(ValueError, match="color_hex"):
+            TagCategory(id="c", name="x", color_hex="#1a78d6")
 
-    def test_color_hue_boundaries(self) -> None:
-        TagCategory(id="c", name="x", color_hue=0)
-        TagCategory(id="c", name="x", color_hue=360)
+    def test_color_hex_missing_hash_raises(self) -> None:
+        with pytest.raises(ValueError, match="color_hex"):
+            TagCategory(id="c", name="x", color_hex="1A78D6")
+
+    def test_color_hex_wrong_length_raises(self) -> None:
+        with pytest.raises(ValueError, match="color_hex"):
+            TagCategory(id="c", name="x", color_hex="#1A78D")
 
 
 # === Tag ===

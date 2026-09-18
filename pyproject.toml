@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "skyrim-mod-workbench"
-version = "0.1.0"
+version = "0.51.3"
 description = "Local-first Skyrim Mod 整理工作台"
 requires-python = ">=3.12"
 dependencies = [
@@ -32,6 +32,9 @@ where = ["src"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+
+[tool.ruff.format]
+line-ending = "lf"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM"]

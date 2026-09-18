@@ -5,7 +5,8 @@
 
 约束：
 - 每个迁移函数只负责 DDL，不写 schema_version。
-- 迁移函数不删除列、不修改既有列定义（避免破坏现有数据）。
+- 迁移函数幂等；破坏性变更（列移除/表重建，如 v11/v13）采用
+  "幂等检查 + 建新表 + 数据回填 + 替换旧表"模式，避免破坏现有数据。
 - schema 变更必须通过迁移（见 AGENTS.md 代码质量）。
 """
 
@@ -677,6 +678,210 @@ def migrate_v10_to_v11(conn: sqlite3.Connection) -> None:
     logger.info("迁移 v10 → v11 完成")
 
 
+def migrate_v11_to_v12(conn: sqlite3.Connection) -> None:
+    """v11 → v12：移除 staging_area 表。
+
+    UX 重构 Phase 1 Task 1 Commit 2：暂存区功能已移除，删除 staging_area 表。
+    staging_area 无任何 FK 被其他表引用（见 migrate_v4_to_v5 注释），
+    可直接 DROP。idx_staging_area_path_key 已在 v11 迁移中删除，无需再处理。
+
+    幂等性：DROP TABLE IF EXISTS 本身幂等。
+    """
+    conn.executescript("DROP TABLE IF EXISTS staging_area;")
+    logger.info("迁移 v11 → v12 完成")
+
+
+def migrate_v12_to_v13(conn: sqlite3.Connection) -> None:
+    """v12 → v13：移除 is_marked 字段，回归纯 DELETE 模式（UX 重构 Task 6）。
+
+    UX 重构 Phase 2 Task 6（数据模型原则 1）：标记 = 数据库有记录，
+    取消标记 = DELETE 记录，不需要 is_marked 表达"曾经标记过但现在不是"的状态。
+
+    变更：
+    1. 清理历史 is_marked=0 记录（用户显式取消标记留下的墓碑）：
+       - 先删 content_unit_tag 关联（schema 无 ON DELETE CASCADE，避免 FK 违约）
+       - 再删 thumbnail_cache 记录（无 FK 声明，但同步清理保持一致性）
+       - 最后 DELETE content_unit WHERE is_marked = 0
+    2. content_unit 表重建，移除 is_marked 列（idx_content_unit_is_marked
+       随旧表 DROP 自动移除）
+    3. 取消标记操作在应用层改为 DELETE（ContentService.unmark_content_unit）
+
+    纯 DELETE 模式的既定后果（roadmap 决策）：取消标记的压缩包在下次扫描时
+    会被重新识别为内容单元候选（不再有墓碑记录阻止重建）。
+
+    幂等性：通过检查 content_unit 是否已有 is_marked 列判断是否已迁移。
+    """
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(content_unit)")}
+    if "is_marked" not in cols:
+        logger.info("v13 迁移已应用，跳过")
+        return
+
+    # === 1. 清理 is_marked=0 记录及其关联 ===
+    # content_unit_tag 无 ON DELETE CASCADE，先删关联避免 FK 违约
+    conn.execute(
+        "DELETE FROM content_unit_tag WHERE content_unit_id IN "
+        "(SELECT id FROM content_unit WHERE is_marked = 0)"
+    )
+    # thumbnail_cache（v7 起无 FK 声明），同步清理保持一致性
+    conn.execute(
+        "DELETE FROM thumbnail_cache WHERE content_unit_id IN "
+        "(SELECT id FROM content_unit WHERE is_marked = 0)"
+    )
+    result = conn.execute("DELETE FROM content_unit WHERE is_marked = 0")
+    if result.rowcount > 0:
+        logger.info("v13 迁移：清理 %d 条 is_marked=0 废弃记录", result.rowcount)
+
+    # === 2. content_unit 表重建：移除 is_marked 列 ===
+    conn.executescript(
+        """
+        CREATE TABLE content_unit_new (
+            id TEXT PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            path_key TEXT NOT NULL UNIQUE,
+            title TEXT,
+            content_type TEXT NOT NULL DEFAULT 'mod',
+            source_url TEXT,
+            cover_path TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO content_unit_new (
+            id, path, path_key, title, content_type, source_url,
+            cover_path, notes, created_at, updated_at
+        )
+        SELECT id, path, path_key, title, content_type, source_url,
+               cover_path, notes, created_at, updated_at
+        FROM content_unit
+        """
+    )
+    conn.executescript(
+        """
+        DROP TABLE content_unit;
+        ALTER TABLE content_unit_new RENAME TO content_unit;
+        """
+    )
+    logger.info("迁移 v12 → v13 完成")
+
+
+def migrate_v13_to_v14(conn: sqlite3.Connection) -> None:
+    """v13 → v14：operation_history.operation_type CHECK 约束扩展为包含 'strip'
+    （操作便捷性1，2026-08-04：提取内容/剥离操作）。
+
+    变更：
+    - operation_type CHECK 约束扩展为包含 'strip'
+      （strip 记录由 StripService 写入，source_path=被剥离文件夹，
+       target_path=上级目录，can_undo=0）
+
+    实现说明：
+    - SQLite 不支持直接修改 CHECK 约束，需重建表
+    - 旧数据全部保留，无新列
+
+    幂等性：通过检查 operation_history 的 CHECK 约束是否已包含 'strip' 判断是否已迁移。
+    """
+    # 幂等检查：读取当前 operation_history 表的 sql，若已含 'strip' 则跳过
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='operation_history'"
+    ).fetchone()
+    if row is None:
+        # 表不存在（全新数据库走 init_db 建表路径），无需迁移
+        return
+    current_sql = row["sql"] if isinstance(row, sqlite3.Row) else row[0]
+    if current_sql and "'strip'" in current_sql:
+        logger.info("v14 迁移已应用，跳过")
+        return
+
+    # 1. 创建新表（CHECK 约束扩展 'strip'）
+    conn.executescript(
+        """
+        CREATE TABLE operation_history_new (
+            id TEXT PRIMARY KEY,
+            operation_type TEXT NOT NULL CHECK(operation_type IN (
+                'move','delete','rename','new_folder','undo','copy','strip'
+            )),
+            source_path TEXT NOT NULL,
+            target_path TEXT,
+            created_at TEXT NOT NULL,
+            can_undo INTEGER NOT NULL DEFAULT 1,
+            undone_at TEXT
+        );
+        """
+    )
+
+    # 2. 迁移旧数据
+    conn.execute(
+        """
+        INSERT INTO operation_history_new
+            (id, operation_type, source_path, target_path, created_at, can_undo, undone_at)
+        SELECT id, operation_type, source_path, target_path, created_at, can_undo, undone_at
+        FROM operation_history
+        """
+    )
+
+    # 3. 替换旧表 + 重建索引
+    conn.executescript(
+        """
+        DROP TABLE operation_history;
+        ALTER TABLE operation_history_new RENAME TO operation_history;
+        CREATE INDEX IF NOT EXISTS idx_operation_history_created
+            ON operation_history(created_at);
+        """
+    )
+    logger.info("迁移 v13 → v14 完成")
+
+
+def migrate_v14_to_v15(conn: sqlite3.Connection) -> None:
+    """v14 → v15：删除 content_unit.title 列 + tag_category 存储完整颜色
+    （2026-08-05 两个 schema 升级 issue 合并迁移）。
+
+    变更：
+    1. content_unit 删除 title 列（UI合理性14 起已停止读写，无用户语义；
+       遗留别名已清，剩余均为 title == 文件名 的默认值，无有价值数据）。
+    2. tag_category 新增 color_hex TEXT（大写 #RRGGBB，完整颜色），
+       用 hue_to_hex 回填既有行（与既有显示色一致，观感零变化），
+       随后删除 color_hue 列。
+
+    实现说明：
+    - SQLite 3.35+ 支持 ALTER TABLE DROP COLUMN（Python 3.12+ 内置
+      SQLite ≥ 3.40，v5→v6 已使用同模式）。title / color_hue 均无
+      索引或约束引用，可安全 DROP。
+    - color_hex 回填在 Python 侧用 hue_to_hex 计算（与 app.tag_colors
+      共用同一换算，避免 SQL 表达 normcase 类问题）。
+
+    幂等性：title 存在才 DROP；color_hex 不存在才 ADD，color_hue
+    存在才 DROP（每步独立检查，重复执行不报错）。
+    """
+    # === 1. content_unit 删除 title 列 ===
+    cu_cols = {r["name"] for r in conn.execute("PRAGMA table_info(content_unit)")}
+    if "title" in cu_cols:
+        conn.execute("ALTER TABLE content_unit DROP COLUMN title")
+        logger.info("v15 迁移：content_unit.title 列已删除")
+
+    # === 2. tag_category：color_hue → color_hex ===
+    from infrastructure.color_utils import hue_to_hex
+
+    tc_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tag_category)")}
+    if "color_hex" not in tc_cols:
+        conn.execute(
+            "ALTER TABLE tag_category ADD COLUMN color_hex TEXT NOT NULL DEFAULT '#000000'"
+        )
+        rows = conn.execute("SELECT id, color_hue FROM tag_category").fetchall()
+        for row in rows:
+            conn.execute(
+                "UPDATE tag_category SET color_hex = ? WHERE id = ?",
+                (hue_to_hex(row["color_hue"]), row["id"]),
+            )
+        logger.info("v15 迁移：tag_category.color_hex 已新增并回填 %d 行", len(rows))
+    if "color_hue" in {r["name"] for r in conn.execute("PRAGMA table_info(tag_category)")}:
+        conn.execute("ALTER TABLE tag_category DROP COLUMN color_hue")
+        logger.info("v15 迁移：tag_category.color_hue 列已删除")
+    logger.info("迁移 v14 → v15 完成")
+
+
 # 迁移注册表：(target_version, migrate_fn)
 # init_db 按 target 升序应用 current < target 的迁移。
 MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
@@ -691,4 +896,8 @@ MIGRATIONS: list[tuple[int, Callable[[sqlite3.Connection], None]]] = [
     (9, migrate_v8_to_v9),
     (10, migrate_v9_to_v10),
     (11, migrate_v10_to_v11),
+    (12, migrate_v11_to_v12),
+    (13, migrate_v12_to_v13),
+    (14, migrate_v13_to_v14),
+    (15, migrate_v14_to_v15),
 ]

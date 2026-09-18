@@ -16,7 +16,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from app.app_paths import get_app_db_path  # noqa: E402
+from app.app_paths import get_app_db_path, get_app_settings_path  # noqa: E402
 from infrastructure.db import get_connection, init_db  # noqa: E402
 
 
@@ -40,7 +40,7 @@ def temp_app_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[P
     root = tmp_path / "appdata"
     root.mkdir(parents=True, exist_ok=True)
     monkeypatch.setenv("SCW_DATA_DIR", str(root))
-    # 同时清理 LOCALAPPDATA 避免触发迁移逻辑
+    # 同时清理 LOCALAPPDATA，保证路径解析只走 SCW_DATA_DIR
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
     yield root
 
@@ -64,3 +64,63 @@ def db_connection(db_path: Path) -> Iterator[sqlite3.Connection]:
         yield conn
     finally:
         conn.close()
+
+
+@pytest.fixture
+def settings_ini(tmp_path: Path):
+    """返回测试隔离的文件形式 QSettings（settings.ini，不写注册表/共享文件）。"""
+    from PySide6.QtCore import QSettings  # noqa: PLC0415
+
+    return QSettings(str(tmp_path / "settings.ini"), QSettings.Format.IniFormat)
+
+
+@pytest.fixture(autouse=True)
+def _clean_shared_qsettings() -> Iterator[None]:
+    """清理测试共享的应用设置持久化键（既有测试隔离缺陷，2026-08-04）。
+
+    背景：test_main_window_assembly.py / test_main_window_move_to.py 的部分用例
+    通过 ``_perform_move_to`` 把最近移动目标写入 MainWindow 应用设置
+    （2026-08-04 起为文件形式 settings.ini，此前为 Windows 注册表），
+    跨用例/跨 pytest 进程污染后续运行；test_main_window_metadata.py 的 FakeMenu
+    用例在污染状态下会因真实子菜单以 FakeMenu 为父构造而崩溃。
+
+    修复：本 fixture 在每个测试前后移除 ``recent_move_targets`` / ``recent_tags``
+    与 ``url/*`` 键（操作便捷性8/9，2026-08-04）以及后续新增配置键
+    （测试各自隔离的临时 INI QSettings 实例不受影响），保证共享状态不跨测试残留。
+    """
+    from PySide6.QtCore import QSettings  # noqa: PLC0415
+
+    from app import ui_constants as ui  # noqa: PLC0415
+
+    settings = QSettings(str(get_app_settings_path()), QSettings.Format.IniFormat)
+    settings.remove("recent_move_targets")
+    settings.remove("recent_tags")
+    settings.remove("url/nexus_url_prefix")
+    settings.remove("url/search_engine_url")
+    settings.remove("url/search_prefix")
+    settings.remove(ui.QSETTINGS_KEY_ARCHIVE_ROOT)
+    settings.remove(ui.QSETTINGS_KEY_ARCHIVE_LAST_TARGET)
+    settings.remove(ui.QSETTINGS_KEY_FEATURE_TOGGLE_PREFIX)
+    settings.remove(ui.QSETTINGS_KEY_SHORTCUT_PREFIX)
+    settings.remove(ui.QSETTINGS_KEY_ICON_COLOR_FOLDER)
+    settings.remove(ui.QSETTINGS_KEY_ICON_COLOR_ARCHIVE)
+    settings.remove(ui.QSETTINGS_KEY_ICON_COLOR_IMAGE)
+    settings.remove(ui.QSETTINGS_KEY_ICON_COLOR_DOCUMENT)
+    settings.sync()
+    try:
+        yield
+    finally:
+        settings.remove("recent_move_targets")
+        settings.remove("recent_tags")
+        settings.remove("url/nexus_url_prefix")
+        settings.remove("url/search_engine_url")
+        settings.remove("url/search_prefix")
+        settings.remove(ui.QSETTINGS_KEY_ARCHIVE_ROOT)
+        settings.remove(ui.QSETTINGS_KEY_ARCHIVE_LAST_TARGET)
+        settings.remove(ui.QSETTINGS_KEY_FEATURE_TOGGLE_PREFIX)
+        settings.remove(ui.QSETTINGS_KEY_SHORTCUT_PREFIX)
+        settings.remove(ui.QSETTINGS_KEY_ICON_COLOR_FOLDER)
+        settings.remove(ui.QSETTINGS_KEY_ICON_COLOR_ARCHIVE)
+        settings.remove(ui.QSETTINGS_KEY_ICON_COLOR_IMAGE)
+        settings.remove(ui.QSETTINGS_KEY_ICON_COLOR_DOCUMENT)
+        settings.sync()

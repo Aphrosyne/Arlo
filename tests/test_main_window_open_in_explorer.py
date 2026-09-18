@@ -56,6 +56,8 @@ def main_window_env(qapp, tmp_path: Path):
 
     managed_service = ManagedRootService(
         ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
         now_provider=lambda: "2026-07-12T00:00:00Z",
         uuid_provider=fake_uuid,
     )
@@ -170,7 +172,7 @@ def test_open_in_explorer_handles_exception(main_window_env) -> None:
             "app.main_window.subprocess.run",
             side_effect=OSError("test error"),
         ),
-        patch("app.main_window.QMessageBox.warning"),
+        patch("app.main_window.QMessageBox.information"),
     ):
         # 应不抛异常
         handler(test_path)

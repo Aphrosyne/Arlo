@@ -1,0 +1,286 @@
+# UX 重构路线图
+
+> 分支：`ux-redesign`。本文档为 UX 重构专项计划，与主线 `roadmap.md` 独立。
+>
+> 目标：融合双面板、清理冗余设计、修复 Code Review 遗留问题、统一交互体验。
+>
+> 本次重构本质上不是 UI 调整，而是一次 **Workspace 架构重构**——从双模式工作区收敛为单面板 + 可钉住装配面板的统一工作区。
+
+---
+
+## 数据模型原则（编码前确认）
+
+以下约束在整个 UX 重构期间不可违反，避免 agent 自行引入多余字段或概念：
+
+1. **标记 = 数据库有记录，取消标记 = DELETE 记录**。ContentUnit 表里有的就是已标记的内容单元，没有的就是未标记。不需要 `status` 列或 `is_marked` 字段表达"曾经标记过但现在不是"的状态。该原则已随 Task 6（schema v13）落地：`is_marked` 字段移除，取消标记 = DELETE 记录。
+2. **Mod 组 = 文件夹内容单元**，不是独立的数据类型或表。"创建 Mod 组"是 UI 操作（建文件夹 + 移入文件 + 标记为内容单元），不引入 `ModGroup` 实体。
+3. **ContentUnit 不存 status、rating 字段**。元数据仅：`title`、`source_url`、`notes`、`cover_path`。
+4. **路径是唯一标识**。一个路径最多对应一条 ContentUnit 记录。
+
+---
+
+## Phase 1：Workspace 重构（核心架构变更）
+
+### Task 1：移除双模式切换
+
+- 删除顶部 [浏览|整理] 模式切换按钮
+- 删除所有模式相关的 UI 行为差异（整理模式中间区固定、树变目标选择器等）
+- 统一为一个面板：目录树 + 文件列表（两种视图） + 右栏（元数据/装配）
+- 移除暂存区标记功能（目录树右键"标记为暂存区" / "取消暂存区标记"）及其相关数据库表
+- "创建 Mod 组"从整理模式独有 → 统一面板中栏右键通用功能：
+  - 单选或多选文件 → 右键 → "创建 Mod 组" → 在当前目录原地创建文件夹（以第一个文件名提取 Mod 名）→ 选中文件移入 → 文件夹标记为内容单元
+  - 命名逻辑与现有保持一致（自动剔除版本号、后缀等无用信息，下拉框提供纯 Mod 名/完整原名）
+
+**实施记录（Commit 1-3）：**
+
+- **Commit 1**：移除 ModeManager/AppMode/模式切换按钮/整理模式状态变量。
+- **Commit 2**：移除 StagingArea 实体/StagingService/StagingAreaRepository，新增 v11→v12 迁移删除 staging_area 表。
+- **Commit 3**：多选创建 Mod 组 + 装配逻辑调整。
+  - D1 调整：原 D1「逐个调用 + 容错」因文件夹已存在 ConflictError 不可行，改为新增 `ContentUnitCreationService.create_content_unit_from_files` 批量接口（一次建文件夹 + 逐个移入 + 容错汇总）。
+  - L2 提前：装配面板「移除文件」功能已在 Commit 3 移除（原计划 Task 4），UI/回调/常量一并清理。
+  - 装配面板始终可见，未绑定时显示空状态占位「无固定内容」（原 Task 2 的部分行为提前）。
+  - 快速插入按钮保持隐藏（C2），Task 4 正式移除 QuickInsertService。
+  - 死方法清理：`ContentService.list_staging_entries` / `MainWindow._refresh_staging_content_list` 已删除。
+
+**留给后续 Task 的项：**
+
+- Task 2：装配面板从中间区分割区域迁移到右栏下方（当前仍在中间区）。
+- Task 3：📌 钉住功能（Pin 只固定装配区域，元数据永远跟随当前选择）。
+- Task 4：QuickInsertService 正式移除；添加到钉住文件夹；拖拽支持。✅ 已在 Task 4（v0.45.0）完成
+- Task 7：FileListView 统一问题——当前 FileListModel（中栏）和 AssemblyListModel（装配面板）两套模型，未来维护两份，建议统一为单一 FileListView（登记为技术债，Task 7 拆分时处理）。
+
+### Task 2：装配面板迁移到右栏
+
+- 装配面板从中间区分割区域移到右栏下方
+- 右栏分为上下两部分，中间可拖拽调整比例：
+  - **上半部分**：元数据面板 + 封面预览（选中内容单元时显示，否则为空状态占位："请选择一个内容单元"）
+  - **下半部分**：装配面板（选中文件夹内容单元时显示其内部文件列表，否则为空状态占位："暂无装配目标，点击内容单元右上角 📌 固定"；文件多时垂直滚动条滚动）
+- 单击内容单元 → 右栏上下两部分同步更新
+- 双击文件夹 → 进入目录（中栏导航，与现有行为一致，无冲突）
+- 装配面板继承中栏的大部分文件操作：右键文件 → 重命名、复制剪切粘贴、"移动到……"等（复用现有快捷键和右键菜单）
+- 装配面板内右键图片 → "重命名为文件夹名"（保留旧功能，也可手动输入名称）
+- 装配面板右键空白处 → "移动到……" → 将整个文件夹移动到目标目录 → 移动成功后自动取消钉住
+- 移除原有"从装配面板移除文件"功能（被剪切/移动到替代）
+- 原有装配面板代码保留，仅改变其父容器和布局位置
+
+**Task 2 实施记录（Commit 1）：**
+
+- 布局重构：移除中栏 `_middle_splitter`，新建右栏 `_right_splitter`（元数据上 + 装配下，初始比例 3:2）。
+- 移除装配面板关闭按钮（B1-1）：`_close_button` / `_on_close_clicked` / `on_panel_closed` 回调 / `_on_assembly_closed` 一并清理。
+- 单击行为 A1-1：单击文件夹内容单元 → 绑定装配面板；单击其他 → 解绑；双击文件夹 → 进入目录。
+- 「加入装配」菜单项移除（B2-2）：`_on_assembly_add_file` / `MENU_ADD_TO_ASSEMBLY` / `ASSEMBLY_ADD_FILE_OK/FAILED` 清理，Task 4 由「添加到钉住文件夹」替代。
+- 信号循环防护：`_bind_assembly_panel` → `bind_mod_group` → `_refresh_file_list` 仅刷新装配面板内部 model，不反向修改 content_view 选区。
+- 装配面板语义调整：扩展为"文件夹透视器"，可透视任意文件夹（不限于内容单元）。新增 `AssemblyService.list_folder_files(path)` + `AssemblyPanel.bind_folder(path)` + `MainWindow._bind_assembly_folder`。单击非内容单元文件夹 → 装配面板透视其内部文件。
+
+**留给后续 Task 的项（Task 2 新增）：**
+
+- 装配面板后续可能改名为"文件夹透视器"以匹配新语义（待用户确认时机，登记为技术债）。
+- 装配面板内文件右键菜单继承中栏操作（重命名/复制/剪切/移动到/复制路径 + 图片重命名封面 + 空白处移动到）→ Commit 2 实现。
+
+**Task 2 实施记录（Commit 2）：**
+
+- 装配面板右键菜单完整继承中栏文件操作：重命名/复制/剪切/粘贴/移动到/删除/复制路径（通过 `on_file_op(action, entries)` 回调委托 MainWindow 复用现有逻辑）。
+- 图片右键额外加「重命名为文件夹名」：新增 `AssemblyService.rename_as_cover_by_path(folder_path, image_path)`，支持非内容单元文件夹。
+- 空白处右键「移动到...」：移动整个透视文件夹，移动成功后解绑装配面板（A3-1）。
+- `_on_assembly_rename_cover` 改用 `rename_as_cover_by_path`，按 `current_folder_path()` 重命名，支持任意文件夹。
+- 测试：新增装配面板文件操作（delete/copy_path/copy+paste）+ 非内容单元文件夹图片重命名 + `rename_as_cover_by_path` 单元测试。
+
+**Task 2 实施记录（修复 1-3，基于验收反馈）：**
+
+- **修复 1：装配面板重命名不再误入文件夹**：抽取 `_rename_entry_core(entry, refresh_middle)` 核心方法，装配面板调用时 `refresh_middle=False`，避免中栏被刷新到文件父目录（错误进入文件夹）。中栏调用仍保持 `refresh_middle=True`。
+- **修复 2：重命名弹窗初始选区忽略后缀**：新增自定义 `_show_rename_dialog` 替换原 `QInputDialog.getText`，通过 `Path.suffix` 计算选区长度，初始选中文件名部分（不含扩展名）。`preview.jpg` 只选中 `preview`，避免误改后缀。`.gitignore` 等以点开头的文件 suffix 为整个名称时全选。
+- **修复 3：装配面板空白处支持粘贴**：`_show_empty_area_menu` 新增「粘贴」菜单项，粘贴到当前透视文件夹。
+- 测试适配：`test_main_window_file_ops_task3a.py` / `test_main_window_shortcuts.py` 重命名测试从 mock `QInputDialog.getText` 改为 mock `MainWindow._show_rename_dialog`。
+
+### Task 3：📌 钉住功能
+
+- 装配面板右上角添加小按钮 📌（Pin/Unpin 切换）
+- 钉住后：中栏点击其他内容、双击进入文件夹等操作均不改变钉住状态，右栏持续显示钉住的文件夹内容
+- 取消钉住：右栏恢复跟随中栏选中切换
+- 钉住状态下中栏可右键 → "添加到钉住文件夹"
+
+**Task 3 实施记录（v0.44.0）：**
+
+- **📌 钉住按钮**：装配面板标题栏右侧新增 📌 按钮（B3 决策：钉住时切换图标 📌 → 📍）。未绑定时按钮禁用（A5）。
+- **钉住状态短路**：`bind_mod_group`/`bind_folder` 在钉住状态下短路不切换绑定（A1/A2 决策）。内部拆分 `_apply_bind_mod_group`/`_apply_bind_folder` 供取消钉住后跟随调用。
+- **取消钉住跟随中栏**（B4）：新增 `on_pin_changed(pinned: bool)` 回调，MainWindow 接收到 `False` 时调用 `_follow_middle_selection_after_unpin` 立即跟随中栏当前选中。中栏选中文件夹内容单元 → 绑定该 Mod 组；选中非内容单元文件夹 → 透视该文件夹；选中文件或无选中 → 解绑显空状态。
+- **创建 Mod 组不自动绑定**（B1）：钉住状态下 `_on_create_mod_group` 不调用 `_bind_assembly_panel`，装配面板保持钉住。
+- **路径不存在自动解除**（A4/B6）：`refresh_current` 检测钉住对象路径不存在时调用 `force_unpin_and_clear`（区别于 `unpin` 仅清标志，此方法同时清空绑定）。
+- **移动整个透视文件夹后强制解除**（A4）：`_on_assembly_file_op` 的 move_to 分支检测到文件夹移动后调用 `force_unpin_and_clear`。
+- **钉住状态不持久化**（A3）：程序重启后清空钉住状态，与现有装配面板绑定行为一致。
+- **钉住状态下文件操作仍可用**（B2）：钉住仅阻止 bind_* 切换，不影响 `refresh_current` 和 `on_file_op` 回调。
+- 「添加到钉住文件夹」菜单项留给 Task 4，不在 Task 3 实现。
+- 测试：新增 11 个 Task 3 钉住功能测试用例，全量回归 1262 tests passed, 4 skipped。
+
+### Task 4："添加到钉住文件夹" + "移动到……" + 基础拖拽（快速插入移除）
+
+- "快速插入"按钮及功能完全移除，其场景由以下替代：
+  - 想把东西塞进钉住的文件夹 → 中栏右键"添加到钉住文件夹" 或 直接拖拽到装配面板
+  - 想把钉住的 Mod 组放入分类目录 → 装配面板右键空白处"移动到……"
+  - 其他任意移动 → 中栏/目录树右键"移动到……"弹出对话框选目标
+- 拖拽支持（优先级由低到高）：
+  - **先做**：中栏文件 → 拖入装配面板 = "添加到钉住文件夹"（仅钉住时接受 drop）
+  - **先做**：中栏内拖拽文件到同目录的文件夹 = "移入该文件夹"
+  - **后做**：中栏文件/文件夹 → 拖到目录树节点 = "移动到该目录"（复杂度高，涉及 drop target 判断、循环检测、跨盘处理等，单独验收）
+
+**Task 4 实施记录（v0.45.0）：**
+
+- **快速插入服务移除**：`QuickInsertService` / `test_quick_insert_service.py` 删除，`main.py` / `application/__init__.py` / `main_window.py` 移除注入与调用。
+- **「添加到钉住文件夹」菜单项**：中栏右键文件/文件夹 → 「添加到钉住文件夹」（仅装配面板钉住时可见），复用 `_perform_move_to` 移动到钉住文件夹，统一冲突解决流程（`ConflictResolutionDialog`）。
+- **装配面板 drop target**：`AssemblyPanel` 实现 `dragEnterEvent`/`dragMoveEvent`/`dropEvent`，仅钉住状态下接受文件/文件夹拖入（与右键添加行为一致），通过 `on_drop_files` 回调委托 MainWindow 走 `_perform_move_to(refresh_assembly=True)`。
+- **中栏内拖拽**：`FileListModel` / `CardListModel` 实现 `mimeData` 返回含本地文件 URL 的 `QMimeData`；`_on_drop_to_folder` 处理拖到同目录文件夹（含自子目录检测 `SelfSubdirectoryError` + 冲突解决）。
+- **`_perform_move_to` 扩展**：新增 `refresh_assembly` 参数，拖入装配面板时无条件刷新；拖入中栏被钉住文件夹时通过 `_refresh_assembly_if_affected` 同步刷新。
+- **测试**：新增 Task 4 测试（添加到钉住/装配面板拖拽/中栏拖拽到文件夹/mimeData），全量回归 1279 passed, 4 skipped。
+
+**Task 4 验收修复（基于用户反馈）：**
+
+- **修复 1：钉住文件夹内操作后装配面板同步刷新**：新增 `_refresh_assembly_if_affected(*affected_dirs)`，在重命名/删除/新建文件夹/粘贴/移动后检查受影响目录是否与钉住文件夹匹配，匹配则 `refresh_current`。覆盖「双击进入被钉住文件夹后进行任何操作」场景，含 5 个测试（rename/delete/new_folder/paste/move_to）。
+- **修复 2：重命名后中栏内容消失（系统性修复）**：新增 `_restore_middle_after_tree_refresh(dir_path)` 统一处理 `_refresh_tree` 后的中栏恢复——`_refresh_tree` 清空 `content_list_model` 且 `restore_expanded_paths` 恢复选中不触发 `selectionChanged` 信号导致中栏空白。新方法通过 `find_index_by_path` 恢复目录树选中 + 直接调用 `_refresh_content_list` 刷新中栏（不依赖信号）。
+- **修复 3：程序启动时多个小窗口闪过**：所有容器组件（`QWidget`/`QSplitter`）创建时显式传入 `self` 作为父对象，避免短暂成为顶级窗口。
+
+**留给后续 Task 的项：**
+
+- 中栏文件/文件夹 → 拖到目录树节点 = "移动到该目录"（复杂度高，登记为后续拖拽增强，不在 Task 5 范围）。
+- 拖拽视觉反馈（目标高亮、中栏自动滚动）→ open-questions §11，归入 Task 8 UI 美化。
+
+---
+
+## Phase 2：交互优化 + 代码清理
+
+> 编码约束：Phase 2 期间不再往 MainWindow 堆方法，新增逻辑尽量抽到独立 controller / helper / view 中，为 Task 7 拆分减负。
+
+### Task 5：交互细节优化
+
+- **右键菜单统一**：消除"浏览/整理菜单重复"和"名称不统一"问题，按场景定义菜单项（见下方菜单规范）
+- 快捷键补全（高频操作：移动到、添加到钉住文件夹等）— open-questions §1
+- 警告弹窗改用 `QMessageBox` 信息级别或自定义无声音提示 — open-questions §2
+- 操作历史面板不显示已撤回操作（通过 `undone_at` 判断）和删除操作，只显示操作类型，悬浮显示详情 — open-questions §3 + §9
+- 修复 undo 循环记录 bug：撤销操作后不应生成新的 redo 记录（如 fafa→lala 撤回后不应产生 lala→fafa 记录），只将原记录标记 `undone_at`
+- 刷新按钮（或 F5），仅刷新当前目录和目录树对应位置，不触发全量扫描 — open-questions §4
+- 状态栏固定为独立行或使用 `QStatusBar`，避免布局抖动 — open-questions §5
+- 所有路径不显示绝对路径，从受管理根目录开始显示（如 `D:\Skyrim\archive\mods\bdor` → `Skyrim\archive\mods\bdor`，含根目录名），受管理目录的父级路径不显示 — open-questions §9
+- 空状态提示：搜索无结果 → "没有找到匹配内容"；目录为空 → "该目录为空"
+
+**实施记录：**
+
+- **右键菜单统一**：新增「打开」「钉住此文件夹」「取消钉住」项；中栏右键文件/文件夹新增「粘贴」项（粘贴到当前中栏目录，剪贴板空时灰显）
+- **QMessageBox 系统提示音抑制**：新增 [message_box_helper.py](src/app/message_box_helper.py)，patch QMessageBox 静态方法使用 `setIcon(NoIcon)` + `setIconPixmap` 抑制 Windows 系统提示音，保留视觉图标；MainWindow.__init__ 调用一次
+- **操作历史显示优化**：移除描述列改用 Tooltip；过滤已撤销记录；删除操作灰色显示；操作类型中文化（HISTORY_OP_LABELS 映射）；新增 copy 分支文案
+- **撤销循环修复**：FileOperationService.move/rename 新增 `record_history: bool = True` 参数；UndoService._undo_rename/_undo_move 调用时传 `record_history=False`，避免产生新的可撤销记录
+- **刷新按钮与 F5**：中栏标题栏新增刷新按钮 + F5 快捷键，仅刷新当前目录和目录树对应节点，同步刷新装配面板
+- **状态栏统一**：使用 Qt 标准 QStatusBar，移除左侧扫描状态 QGroupBox
+- **路径简化显示**：新增 [path_display.py](src/app/path_display.py)，左栏目录详情、右栏元数据面板、操作历史 Tooltip 均应用简化路径；相对路径**包含根目录名**（验收修正：`D:\testPath\A\B\C` → `A\B\C`），外部路径加 `[外部]` 前缀
+- **空状态提示**：搜索无结果 → "没有找到匹配内容"；目录为空 → "该目录为空"
+
+**右键菜单规范：**
+
+| 场景 | 菜单项 |
+|------|--------|
+| 普通文件 | 打开、重命名、复制、剪切、粘贴、删除、移动到……、复制路径 |
+| 普通文件夹 | 打开、重命名、复制、剪切、粘贴、删除、移动到……、复制路径、在资源管理器中打开、钉住此文件夹 |
+| 已标记的内容单元（文件） | 编辑元数据、设置封面、取消内容单元标记、移动到……、复制路径 |
+| 已标记的内容单元（文件夹） | 编辑元数据、设置封面、取消内容单元标记、移动到……、复制路径、在资源管理器中打开、钉住此文件夹 |
+| 装配面板内文件 | 重命名、复制、剪切、移动到……（与中栏一致） |
+| 装配面板内图片 | 重命名为文件夹名、重命名、复制、剪切、移动到…… |
+| 装配面板空白处 | 移动到……（移动整个钉住文件夹）、取消钉住 |
+| 多选（中栏） | 批量移动到……、创建 Mod 组、批量打标签 |
+| 中栏/装配面板空白处（有钉住时） | 取消钉住 |
+
+### Task 6：数据库与死代码清理 ✅（v0.47.0，2026-08-01）
+
+**实施记录：**
+- **schema v12→v13 迁移**：清理历史 `is_marked=0` 记录（级联 content_unit_tag / thumbnail_cache）
+  → 重建 content_unit 表移除 `is_marked` 列与索引，回归纯 DELETE 模式。
+  Domain / Repository / Search / Scan / FileOperation 全链路移除 `is_marked`。
+- **取消标记改为 DELETE**：`ContentService.unmark_content_unit` 删除记录
+  （元数据随之删除；取消标记的压缩包下次扫描会重新识别，为 roadmap 既定后果）。
+- **remove_root 同步清理**：`ManagedRootService.remove_root` 注入 folder_cache /
+  content_unit 仓储 + UoW，清理被移除根前缀下的扫描记录（重叠守卫：仍属于其他
+  剩余根目录的记录不清理）。
+- **旧目录检测代码移除**：`app_paths` 删除 `%LOCALAPPDATA%` 旧目录检测/迁移提示
+  代码与对应测试；`%LOCALAPPDATA%` 路径回退保留（open-questions §7 决策）。
+- **死代码清理**：TD-L31（ui_constants 缩略图死常量）、TD-L32（AssemblyService
+  .remove_file）、TD-L33（"浏览/整理模式"过时注释）一并处理。
+- **确认项**：staging_area 清理（Task 1 已完成）、data/ 目录结构 + `.gitignore`
+  （Task 0.5 已完成）。
+
+### Task 7：MainWindow 拆分
+
+- 来源：TD-M21 + TD-M31（约 3490 行 / 150 方法 / 60+ 实例变量，2026-08-01 复核）
+- 至少拆出：
+  - `ScanController`（扫描线程生命周期 + 信号转发）
+  - `AssemblyController`（装配面板绑定 / 回调）
+  - `MetadataView`（元数据编辑面板）
+  - `TransactionScope`（`_commit` / `_rollback` 从事务编排中解耦）
+- 同步处理的技术债：TD-H10（FileOperationService 分层归属）、TD-L25（helper 私有 `_repo` 访问）、TD-M26（MainWindow 集成测试）、TD-M35（跨盘异常类型统一）
+
+**实施记录（分批：Commit 1 = 控制器拆分，Commit 2 = 技术债 + FileListView 统一）：**
+
+**Commit 1 ✅：**
+- 新增 [transaction_scope.py](src/app/transaction_scope.py)：`_commit` / `_rollback` /
+  `_handle_service_error` 逻辑封装（TD-M31），MainWindow 委托调用
+- 新增 [scan_controller.py](src/app/scan_controller.py)：ScanWorker + QThread 生命周期
+  （TD-H4/H5 sender 竞态校验迁入），TD-M13 进度信号接线；新增
+  [test_scan_controller.py](tests/test_scan_controller.py) 单元测试（TD-M26 起点）
+- 新增 [assembly_controller.py](src/app/assembly_controller.py)：装配面板绑定 / 钉住 /
+  跟随中栏 / 受影响刷新逻辑迁出，MainWindow 保留文件操作编排与薄委托
+- 新增 [metadata_view.py](src/app/metadata_view.py)：元数据面板加载 / 保存提交 /
+  封面选择编排迁出（面板信号改由 MetadataView 接管）
+- MainWindow 实例变量与逻辑相应瘦身，全部现有测试保持通过（1283 passed, 4 skipped）
+
+**Commit 2 ✅：**
+- TD-H10：`FileOperationService` 从 `infrastructure/` 迁移到 `application/`
+  （消除 infrastructure → application 反向依赖；FolderCacheSyncHelper 保持 infrastructure）
+- TD-L25：`FolderCacheSyncHelper` 新增语义化 `delete_folder_subtree(path)`，
+  `_sync_on_delete` 不再访问 helper 私有 `_repo`
+- TD-M35：`rename` 跨盘统一抛 `CrossDriveError`（与 `move` 一致，FileOperationError 子类）
+- TD-M36：移除 `AssemblyListModel`，装配面板复用 `FileListModel(single_column=True)`
+  （单列纯文件名 + 标准图标，视觉行为一致，消除双模型维护）
+
+---
+
+## Phase 3：UI 美化
+
+### Task 8：多模态 AI 分析 + 整体 UI 重构
+
+- 来源：open-questions.md §8
+- 用多模态 AI 分析当前界面截图，生成 UI 重构提示词
+- 统一配色、间距、字体、图标
+- 暗色模式支持（QSS 颜色变量提取，TD-L21）
+- 考虑引入轻量 Toast 通知组件（右下角短暂弹出，不影响布局），替代部分 QMessageBox
+
+---
+
+## Phase 4：真实 Mod 库验证
+
+### Task 9：用自己的 Mod 库实际跑一遍
+
+- 导入现有 Mod 库，执行一遍完整的整理流程：
+  - 创建 Mod 组（单/多选）
+  - 钉住 + 添加到钉住文件夹
+  - 移动到目标分类目录
+  - 复制/剪切/粘贴
+  - 重命名、删除
+  - 搜索 + 标签筛选
+  - 封面自动候选 + 手动设置
+  - 操作历史与撤销
+- 记录所有不符合预期的行为或操作不流畅的地方 → 形成修复清单
+- 优先级：先修影响整理效率的问题，再修美化类问题
+
+---
+
+## 同步处理的 Technical Debt
+
+以下技术债随 UX 重构一并处理（已在 technical-debt.md 登记归入"UI 重构版本"）：
+
+| 编号 | 内容 | 对应 Phase |
+|------|------|-----------|
+| TD-M21 | MainWindow God Object 拆分 | Task 7 |
+| TD-M31 | MainWindow 业务逻辑泄漏 | Task 7 |
+| TD-H10 | FileOperationService 分层归属 | Task 7 |
+| TD-L25 | FileOperationService 访问 helper 私有 `_repo` | Task 7 |
+| TD-M26 | MainWindow 集成测试 | Task 7 |
+| TD-M35 | rename/move 跨盘异常类型统一 | Task 7 |
+| TD-L24 | FileEntry 类名与注释不一致 | Task 8 |
+| TD-L28 | UI 中"目录"和"文件夹"混用 | Task 8 |
+| TD-L21 | UI 样式表硬编码颜色 | Task 8 |

@@ -34,7 +34,11 @@ def main_window_with_failing_commit(qapp, tmp_path: Path):
     conn = get_connection(db_path)
     conn.row_factory = sqlite3.Row
 
-    managed_service = ManagedRootService(ManagedRootRepository(conn))
+    managed_service = ManagedRootService(
+        ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
+    )
     tree_service = FolderTreeService(
         ManagedRootRepository(conn),
         FolderCacheRepository(conn),
@@ -66,7 +70,7 @@ def test_commit_failure_shows_critical_message_box(
         called.append((parent, title, message))
 
     monkeypatch.setattr(
-        "app.main_window.QMessageBox.critical",
+        "app.transaction_scope.QMessageBox.critical",
         fake_critical,
     )
 
@@ -85,7 +89,11 @@ def test_commit_success_does_not_show_message_box(qapp, tmp_path: Path, monkeypa
     conn = get_connection(db_path)
     conn.row_factory = sqlite3.Row
 
-    managed_service = ManagedRootService(ManagedRootRepository(conn))
+    managed_service = ManagedRootService(
+        ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
+    )
     tree_service = FolderTreeService(
         ManagedRootRepository(conn),
         FolderCacheRepository(conn),
@@ -102,7 +110,7 @@ def test_commit_success_does_not_show_message_box(qapp, tmp_path: Path, monkeypa
 
     called: list[tuple] = []
     monkeypatch.setattr(
-        "app.main_window.QMessageBox.critical",
+        "app.transaction_scope.QMessageBox.critical",
         lambda *args, **kwargs: called.append(args),
     )
 
@@ -120,7 +128,11 @@ def test_commit_failure_without_callback_does_not_raise(qapp, tmp_path: Path) ->
     conn = get_connection(db_path)
     conn.row_factory = sqlite3.Row
 
-    managed_service = ManagedRootService(ManagedRootRepository(conn))
+    managed_service = ManagedRootService(
+        ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
+    )
     tree_service = FolderTreeService(
         ManagedRootRepository(conn),
         FolderCacheRepository(conn),

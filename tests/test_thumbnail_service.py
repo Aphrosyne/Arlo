@@ -36,9 +36,7 @@ def unit_u1(db_connection, content_unit_repo, tmp_path) -> ContentUnit:
     unit = ContentUnit(
         id="u1",
         path=str(tmp_path / "u1"),
-        title="U1",
         content_type="mod",
-        is_marked=True,
         created_at="2026-07-01T00:00:00Z",
         updated_at="2026-07-01T00:00:00Z",
     )
@@ -78,11 +76,9 @@ def unit_with_cover(
     updated = ContentUnit(
         id=unit_u1.id,
         path=unit_u1.path,
-        title=unit_u1.title,
         content_type=unit_u1.content_type,
         source_url=unit_u1.source_url,
         cover_path="cover.jpg",
-        is_marked=unit_u1.is_marked,
         notes=unit_u1.notes,
         created_at=unit_u1.created_at,
         updated_at=unit_u1.updated_at,
@@ -217,6 +213,20 @@ def test_generate_success_writes_cache_and_file(service, jpg_source, cache_repo,
     assert cache.status == "ok"
     assert cache.size == 256
     assert cache.source_size_bytes == jpg_source.stat().st_size
+
+
+def test_generate_uses_cover_mode_by_default(service, jpg_source, thumbnails_dir):
+    """UI合理性16：服务生成链路默认 cover——方形填满、无圆角/透明条。"""
+    status = service.generate("u1", jpg_source, size=256)
+    assert status == "ok"
+    cache_file = thumbnails_dir / "u1_256.webp"
+    with Image.open(cache_file) as img:
+        assert img.size == (256, 256)
+        # 不透明源图输出可为 RGB（WebP 优化掉全不透明 alpha 通道）
+        if "A" in img.getbands():
+            alpha = img.split()[-1]
+            assert alpha.getextrema() == (255, 255)
+            assert alpha.getpixel((0, 0)) == 255  # 角不透明 → 无圆角/透明条
 
 
 def test_generate_512_writes_separate_cache(service, jpg_source, cache_repo, thumbnails_dir):

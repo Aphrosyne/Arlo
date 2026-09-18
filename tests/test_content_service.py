@@ -36,17 +36,13 @@ def service(repo: ContentUnitRepository) -> ContentService:
 def _make_unit(
     unit_id: str,
     path: str,
-    title: str | None = None,
     created_at: str = "2026-07-12T00:00:00Z",
-    is_marked: bool = True,
 ) -> ContentUnit:
     return ContentUnit(
         id=unit_id,
         path=path,
         created_at=created_at,
         updated_at=created_at,
-        title=title,
-        is_marked=is_marked,
     )
 
 
@@ -59,7 +55,7 @@ class TestListByDirectory:
     ) -> None:
         mods = tmp_path / "mods"
         armor = mods / "armor"
-        unit = _make_unit("u1", str(armor), title="护甲")
+        unit = _make_unit("u1", str(armor))
         repo.create(unit)
 
         result = service.list_by_directory(str(mods))
@@ -71,8 +67,8 @@ class TestListByDirectory:
     ) -> None:
         mods = tmp_path / "mods"
         mods.mkdir()
-        u1 = _make_unit("u1", str(mods / "armor"), title="护甲")
-        u2 = _make_unit("u2", str(mods / "weapons"), title="武器")
+        u1 = _make_unit("u1", str(mods / "armor"))
+        u2 = _make_unit("u2", str(mods / "weapons"))
         repo.create(u1)
         repo.create(u2)
 
@@ -88,8 +84,8 @@ class TestListByDirectory:
         mods_b = tmp_path / "mods_b"
         mods_a.mkdir()
         mods_b.mkdir()
-        u1 = _make_unit("u1", str(mods_a / "armor"), title="护甲")
-        u2 = _make_unit("u2", str(mods_b / "weapons"), title="武器")
+        u1 = _make_unit("u1", str(mods_a / "armor"))
+        u2 = _make_unit("u2", str(mods_b / "weapons"))
         repo.create(u1)
         repo.create(u2)
 
@@ -102,12 +98,12 @@ class TestListByDirectory:
     ) -> None:
         # 构造中文路径（不实际创建文件，ContentUnit 只存字符串路径）
         armor_path = str(tmp_path / "mods" / "护甲")
-        u1 = _make_unit("u1", armor_path, title="寒霜之心")
+        u1 = _make_unit("u1", armor_path)
         repo.create(u1)
 
         result = service.list_by_directory(str(tmp_path / "mods"))
         assert len(result) == 1
-        assert result[0].title == "寒霜之心"
+        assert result[0].path == armor_path
 
 
 class TestListDirectChildren:
@@ -121,9 +117,9 @@ class TestListDirectChildren:
         armor = mods / "armor"
         armor_deep = armor / "deep"
         # 直接子项
-        u1 = _make_unit("u1", str(armor), title="护甲")
+        u1 = _make_unit("u1", str(armor))
         # 深层子项
-        u2 = _make_unit("u2", str(armor_deep), title="深层")
+        u2 = _make_unit("u2", str(armor_deep))
         repo.create(u1)
         repo.create(u2)
 
@@ -138,9 +134,9 @@ class TestListDirectChildren:
         l1 = mods / "L1"
         l2 = l1 / "L2"
         l3 = l2 / "L3"
-        u1 = _make_unit("u1", str(l1), title="L1")
-        u2 = _make_unit("u2", str(l2), title="L2")
-        u3 = _make_unit("u3", str(l3), title="L3")
+        u1 = _make_unit("u1", str(l1))
+        u2 = _make_unit("u2", str(l2))
+        u3 = _make_unit("u3", str(l3))
         repo.create(u1)
         repo.create(u2)
         repo.create(u3)
@@ -168,7 +164,7 @@ class TestListDirectChildren:
     ) -> None:
         """内容单元路径等于目录本身时包含。"""
         mods = tmp_path / "mods"
-        u1 = _make_unit("u1", str(mods), title="Mods 本身")
+        u1 = _make_unit("u1", str(mods))
         repo.create(u1)
 
         result = service.list_direct_children(str(mods))
@@ -180,22 +176,22 @@ class TestListDirectChildren:
     ) -> None:
         armor_path = str(tmp_path / "mods" / "护甲")
         deep_path = str(tmp_path / "mods" / "护甲" / "深层")
-        u1 = _make_unit("u1", armor_path, title="寒霜之心")
-        u2 = _make_unit("u2", deep_path, title="深层")
+        u1 = _make_unit("u1", armor_path)
+        u2 = _make_unit("u2", deep_path)
         repo.create(u1)
         repo.create(u2)
 
         result = service.list_direct_children(str(tmp_path / "mods"))
         assert len(result) == 1
-        assert result[0].title == "寒霜之心"
+        assert result[0].path == armor_path
 
     def test_multiple_direct_children(
         self, repo: ContentUnitRepository, service: ContentService, tmp_path: Path
     ) -> None:
         mods = tmp_path / "mods"
-        u1 = _make_unit("u1", str(mods / "armor"), title="护甲")
-        u2 = _make_unit("u2", str(mods / "weapons"), title="武器")
-        u3 = _make_unit("u3", str(mods / "spells"), title="法术")
+        u1 = _make_unit("u1", str(mods / "armor"))
+        u2 = _make_unit("u2", str(mods / "weapons"))
+        u3 = _make_unit("u3", str(mods / "spells"))
         repo.create(u1)
         repo.create(u2)
         repo.create(u3)
@@ -210,13 +206,12 @@ class TestGetById:
     def test_existing_unit(
         self, repo: ContentUnitRepository, service: ContentService, tmp_path: Path
     ) -> None:
-        unit = _make_unit("u1", str(tmp_path / "armor"), title="护甲")
+        unit = _make_unit("u1", str(tmp_path / "armor"))
         repo.create(unit)
 
         result = service.get_by_id("u1")
         assert result is not None
         assert result.id == "u1"
-        assert result.title == "护甲"
 
     def test_nonexistent_unit(self, service: ContentService) -> None:
         assert service.get_by_id("nonexistent") is None
@@ -315,14 +310,13 @@ class TestListDirectoryEntries:
         archive = armor / "寒霜之心.7z"
         archive.write_bytes(b"\x00" * 100)
         # 创建对应内容单元（path 为压缩包文件路径）
-        repo.create(_make_unit("u1", str(archive), title="寒霜之心.7z"))
+        repo.create(_make_unit("u1", str(archive)))
 
         # 在 armor 目录下查询，应找到压缩包文件并关联
         entries = service.list_directory_entries(str(armor))
         archive_entry = next(e for e in entries if e.name == "寒霜之心.7z")
         assert archive_entry.content_unit is not None
         assert archive_entry.content_unit.id == "u1"
-        assert archive_entry.content_unit.title == "寒霜之心.7z"
 
     def test_non_content_unit_entry_has_none(
         self, repo: ContentUnitRepository, service: ContentService, tmp_path: Path
@@ -335,7 +329,7 @@ class TestListDirectoryEntries:
         (mods / "armor" / "a.7z").write_bytes(b"\x00")
         (mods / "weapons" / "w.7z").write_bytes(b"\x00")
         # 只为 armor/a.7z 创建内容单元
-        repo.create(_make_unit("u1", str(mods / "armor" / "a.7z"), title="a.7z"))
+        repo.create(_make_unit("u1", str(mods / "armor" / "a.7z")))
 
         # 在 mods 目录下查询
         entries = service.list_directory_entries(str(mods))
@@ -393,242 +387,6 @@ class TestListDirectoryEntries:
         assert "link.txt" not in names
 
 
-class TestListStagingEntries:
-    """list_staging_entries：递归遍历暂存区下所有文件与子目录。
-
-    阶段 3 Task 2：与 list_directory_entries 区别为递归 + 批量 content_unit 关联。
-    所有测试使用 tmp_path fixture 创建真实文件系统。
-    """
-
-    def test_empty_directory_returns_empty(self, service: ContentService, tmp_path: Path) -> None:
-        empty = tmp_path / "empty"
-        empty.mkdir()
-        assert service.list_staging_entries(str(empty)) == []
-
-    def test_nonexistent_path_returns_empty(self, service: ContentService, tmp_path: Path) -> None:
-        result = service.list_staging_entries(str(tmp_path / "nonexistent"))
-        assert result == []
-
-    def test_not_a_directory_returns_empty(self, service: ContentService, tmp_path: Path) -> None:
-        f = tmp_path / "file.txt"
-        f.write_text("hello", encoding="utf-8")
-        assert service.list_staging_entries(str(f)) == []
-
-    def test_recursive_traversal_includes_subdir_files(
-        self, service: ContentService, tmp_path: Path
-    ) -> None:
-        """递归遍历：暂存区下多层子目录中的文件都应返回。"""
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        # 顶层文件
-        (staging / "top.7z").write_bytes(b"\x00" * 100)
-        # 一层子目录
-        (staging / "汉化").mkdir()
-        (staging / "汉化" / "patch.zip").write_bytes(b"\x00" * 50)
-        (staging / "汉化" / "readme.txt").write_text("hi", encoding="utf-8")
-        # 二层子目录
-        (staging / "汉化" / "deep").mkdir()
-        (staging / "汉化" / "deep" / "nested.7z").write_bytes(b"\x00" * 20)
-
-        entries = service.list_staging_entries(str(staging))
-        names = {e.name for e in entries}
-        assert "top.7z" in names
-        assert "patch.zip" in names
-        assert "readme.txt" in names
-        assert "nested.7z" in names
-        # 子目录本身也作为条目返回
-        assert "汉化" in names
-        assert "deep" in names
-        assert len(entries) == 6
-
-    def test_batch_content_unit_association(
-        self, repo: ContentUnitRepository, service: ContentService, tmp_path: Path
-    ) -> None:
-        """批量预查：暂存区内多个 content_unit 一次性关联，无 N 次 DB 查询。"""
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        archive1 = staging / "mod1.7z"
-        archive2 = staging / "sub" / "mod2.zip"
-        archive1.write_bytes(b"\x00" * 10)
-        (staging / "sub").mkdir()
-        archive2.write_bytes(b"\x00" * 20)
-        # 在暂存区外创建一个内容单元，确认不会被错误关联
-        outside = tmp_path / "outside.7z"
-        outside.write_bytes(b"\x00")
-        repo.create(_make_unit("u1", str(archive1), title="mod1"))
-        repo.create(_make_unit("u2", str(archive2), title="mod2"))
-        repo.create(_make_unit("u3", str(outside), title="outside"))
-
-        entries = service.list_staging_entries(str(staging))
-        archive1_entry = next(e for e in entries if e.name == "mod1.7z")
-        archive2_entry = next(e for e in entries if e.name == "mod2.zip")
-        assert archive1_entry.content_unit is not None
-        assert archive1_entry.content_unit.id == "u1"
-        assert archive2_entry.content_unit is not None
-        assert archive2_entry.content_unit.id == "u2"
-
-    def test_non_content_unit_entry_has_none(
-        self, repo: ContentUnitRepository, service: ContentService, tmp_path: Path
-    ) -> None:
-        """未标记为内容单元的条目 content_unit 字段为 None。"""
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        (staging / "a.7z").write_bytes(b"\x00")
-        (staging / "readme.txt").write_text("hi", encoding="utf-8")
-        (staging / "sub").mkdir()
-        # 只为 a.7z 创建内容单元
-        repo.create(_make_unit("u1", str(staging / "a.7z"), title="a.7z"))
-
-        entries = service.list_staging_entries(str(staging))
-        a_entry = next(e for e in entries if e.name == "a.7z")
-        readme_entry = next(e for e in entries if e.name == "readme.txt")
-        sub_entry = next(e for e in entries if e.name == "sub")
-        assert a_entry.content_unit is not None
-        assert readme_entry.content_unit is None
-        assert sub_entry.content_unit is None
-
-    def test_chinese_path_and_filename(self, service: ContentService, tmp_path: Path) -> None:
-        """中文路径与文件名正确返回。"""
-        staging = tmp_path / "暂存区"
-        staging.mkdir()
-        (staging / "护甲").mkdir()
-        (staging / "护甲" / "寒霜之心.7z").write_bytes(b"\x00" * 100)
-
-        entries = service.list_staging_entries(str(staging))
-        names = {e.name for e in entries}
-        assert "护甲" in names
-        assert "寒霜之心.7z" in names
-
-    def test_dirs_sorted_before_files(self, service: ContentService, tmp_path: Path) -> None:
-        """文件夹在前，按名称不区分大小写升序。"""
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        (staging / "z_file.txt").write_text("z", encoding="utf-8")
-        (staging / "a_dir").mkdir()
-        (staging / "m_file.txt").write_text("m", encoding="utf-8")
-        (staging / "b_dir").mkdir()
-
-        entries = service.list_staging_entries(str(staging))
-        assert entries[0].is_dir
-        assert entries[1].is_dir
-        assert entries[0].name == "a_dir"
-        assert entries[1].name == "b_dir"
-        assert not entries[2].is_dir
-        assert not entries[3].is_dir
-
-    def test_entry_basic_fields(self, service: ContentService, tmp_path: Path) -> None:
-        """返回的 FileEntry 含正确 name/path/is_dir/size/modified_at。"""
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        (staging / "file.txt").write_text("hello world", encoding="utf-8")
-
-        entries = service.list_staging_entries(str(staging))
-        assert len(entries) == 1
-        entry = entries[0]
-        assert entry.name == "file.txt"
-        assert entry.path == str(staging / "file.txt")
-        assert entry.is_dir is False
-        assert entry.size == 11
-        assert entry.modified_at  # ISO 8601 字符串非空
-
-    def test_directory_size_is_none(self, service: ContentService, tmp_path: Path) -> None:
-        """文件夹的 size 字段为 None。"""
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        (staging / "subdir").mkdir()
-
-        entries = service.list_staging_entries(str(staging))
-        assert len(entries) == 1
-        assert entries[0].is_dir
-        assert entries[0].size is None
-
-    def test_returns_file_entry_instances(self, service: ContentService, tmp_path: Path) -> None:
-        """确保返回的是 FileEntry 实例。"""
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        (staging / "a.txt").write_text("a", encoding="utf-8")
-
-        entries = service.list_staging_entries(str(staging))
-        assert len(entries) == 1
-        assert isinstance(entries[0], FileEntry)
-
-    def test_symlink_skipped(self, service: ContentService, tmp_path: Path) -> None:
-        """符号链接应被跳过（避免循环）。"""
-        if os.name == "nt":
-            pytest.skip("Windows 上创建符号链接可能需要管理员权限")
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        target = tmp_path / "target.txt"
-        target.write_text("t", encoding="utf-8")
-        link = staging / "link.txt"
-        try:
-            link.symlink_to(target)
-        except OSError:
-            pytest.skip("无法创建符号链接")
-
-        entries = service.list_staging_entries(str(staging))
-        names = [e.name for e in entries]
-        assert "link.txt" not in names
-
-    def test_content_unit_folder_hides_children(
-        self, repo: ContentUnitRepository, service: ContentService, tmp_path: Path
-    ) -> None:
-        """spec §7.3：已标记为内容单元的文件夹，其子文件/子文件夹不显示在暂存区列表中。
-
-        这与 spec §5.4（标记文件夹时取消子项标记）的语义一致——
-        已收纳到 Mod 组的文件不再作为"零散文件"显示。
-        """
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        # 顶层：一个 Mod 组文件夹 + 一个零散文件
-        mod_folder = staging / "BDOR Black Knight"
-        mod_folder.mkdir()
-        (mod_folder / "BDOR Black Knight 1.0.7z").write_bytes(b"\x00" * 100)
-        (mod_folder / "preview.jpg").write_bytes(b"\x00" * 50)
-        # 子子目录
-        (mod_folder / "extra").mkdir()
-        (mod_folder / "extra" / "patch.7z").write_bytes(b"\x00" * 30)
-        # 顶层零散文件
-        (staging / "SkyUI 5.1 SE.zip").write_bytes(b"\x00" * 80)
-
-        # 标记 BDOR Black Knight 文件夹为内容单元
-        repo.create(_make_unit("u-mod", str(mod_folder), title="BDOR Black Knight"))
-
-        entries = service.list_staging_entries(str(staging))
-        names = {e.name for e in entries}
-
-        # Mod 组文件夹本身仍显示（它是内容单元）
-        assert "BDOR Black Knight" in names
-        mod_entry = next(e for e in entries if e.name == "BDOR Black Knight")
-        assert mod_entry.content_unit is not None
-
-        # 顶层零散文件仍显示
-        assert "SkyUI 5.1 SE.zip" in names
-
-        # Mod 组文件夹内部的子文件/子目录不显示（已收纳）
-        assert "BDOR Black Knight 1.0.7z" not in names
-        assert "preview.jpg" not in names
-        assert "extra" not in names
-        assert "patch.7z" not in names
-
-    def test_unmarked_folder_does_not_hide_children(
-        self, repo: ContentUnitRepository, service: ContentService, tmp_path: Path
-    ) -> None:
-        """普通文件夹（未标记为内容单元）的子文件仍正常显示。"""
-        staging = tmp_path / "staging"
-        staging.mkdir()
-        subdir = staging / "普通文件夹"
-        subdir.mkdir()
-        (subdir / "readme.txt").write_text("hi", encoding="utf-8")
-        (staging / "top.7z").write_bytes(b"\x00" * 10)
-
-        entries = service.list_staging_entries(str(staging))
-        names = {e.name for e in entries}
-        assert "普通文件夹" in names
-        assert "readme.txt" in names
-        assert "top.7z" in names
-
-
 class TestCreateContentUnit:
     def test_basic_create(self, db_connection, tmp_path: Path) -> None:
         """基本创建：返回 ContentUnit，DB 中可查。"""
@@ -647,27 +405,12 @@ class TestCreateContentUnit:
 
         assert unit.id == "uuid-create-1"
         assert unit.path == str(path)
-        assert unit.title is None
         assert unit.content_type == "mod"
-        assert unit.is_marked is True
         assert unit.created_at == "2026-07-14T00:00:00Z"
         # DB 中可查
         fetched = svc._repo.get_by_id("uuid-create-1")  # noqa: SLF001
         assert fetched is not None
         assert fetched.path == str(path)
-
-    def test_default_is_marked_true(self, db_connection, tmp_path: Path) -> None:
-        """默认 is_marked=True。"""
-        from application.content_service import ContentService
-        from infrastructure.repositories.content_unit import ContentUnitRepository
-
-        svc = ContentService(ContentUnitRepository(db_connection))
-        path = tmp_path / "mod.7z"
-        path.write_bytes(b"data")
-
-        unit = svc.create_content_unit(path)
-
-        assert unit.is_marked is True
 
     def test_duplicate_path_raises(self, db_connection, tmp_path: Path) -> None:
         """path 唯一约束：重复创建抛 ConstraintViolationError。"""
@@ -987,8 +730,8 @@ class TestMarkAsContentUnitUoW:
 
 
 class TestUnmarkContentUnit:
-    def test_unmark_sets_status_unmarked(self, db_connection, tmp_path: Path) -> None:
-        """取消标记：将 status 设为 'unmarked'（而非删除记录）。"""
+    def test_unmark_deletes_record(self, db_connection, tmp_path: Path) -> None:
+        """纯 DELETE 模式（Task 6）：取消标记 = 删除记录。"""
         from application.content_service import ContentService
         from infrastructure.repositories.content_unit import ContentUnitRepository
 
@@ -1003,13 +746,12 @@ class TestUnmarkContentUnit:
 
         svc.unmark_content_unit(unit.id)
 
-        # 记录仍在 DB，但 is_marked 为 False
+        # 记录已删除
         result = svc._repo.get_by_id(unit.id)  # noqa: SLF001
-        assert result is not None
-        assert result.is_marked is False
+        assert result is None
 
-    def test_unmark_preserves_content_unit_tag(self, db_connection, tmp_path: Path) -> None:
-        """取消标记：保留 content_unit_tag（用户重新标记后可恢复标签）。"""
+    def test_unmark_cascades_content_unit_tag(self, db_connection, tmp_path: Path) -> None:
+        """取消标记：级联删除 content_unit_tag（仓储 delete 显式清理）。"""
         from application.content_service import ContentService
         from infrastructure.repositories.content_unit import ContentUnitRepository
 
@@ -1025,8 +767,8 @@ class TestUnmarkContentUnit:
         # 插入一条 content_unit_tag 记录（构造 FK 引用）
         # 注意：tag 表无记录，直接插 content_unit_tag 会 FK 违约，需先插 tag_category + tag
         db_connection.execute(
-            "INSERT INTO tag_category (id, name, color_hue) VALUES (?, ?, ?)",
-            ("cat-1", "测试分类", 0),
+            "INSERT INTO tag_category (id, name, color_hex) VALUES (?, ?, ?)",
+            ("cat-1", "测试分类", "#D61A1A"),
         )
         db_connection.execute(
             "INSERT INTO tag (id, name, category_id) VALUES (?, ?, ?)",
@@ -1038,16 +780,16 @@ class TestUnmarkContentUnit:
         )
         db_connection.commit()
 
-        # 取消标记应成功
+        # 取消标记应成功（删除记录 + 级联清理关联）
         svc.unmark_content_unit(unit.id)
         db_connection.commit()
 
-        # content_unit_tag 记录应被保留（unmarked 仅改状态，不删关联）
+        # content_unit_tag 记录应被级联删除
         rows = db_connection.execute(
             "SELECT * FROM content_unit_tag WHERE content_unit_id = ?",
             (unit.id,),
         ).fetchall()
-        assert len(rows) == 1
+        assert len(rows) == 0
 
     def test_unmark_does_not_modify_real_file(self, db_connection, tmp_path: Path) -> None:
         """取消标记不删除真实文件。"""
@@ -1080,6 +822,103 @@ class TestUnmarkContentUnit:
             svc.unmark_content_unit("nonexistent-id")
 
 
+class TestUnmarkPathAndDescendants:
+    """unmark_path_and_descendants（功能增加1 归档，2026-08-04）。"""
+
+    def test_deletes_path_and_descendants(self, db_connection, tmp_path: Path) -> None:
+        """删除路径自身及其子项记录；无关路径记录保留。"""
+        from application.content_service import ContentService
+        from infrastructure.repositories.content_unit import ContentUnitRepository
+
+        counter = {"n": 0}
+
+        def fake_uuid() -> str:
+            counter["n"] += 1
+            return f"uuid-archive-{counter['n']}"
+
+        svc = ContentService(
+            ContentUnitRepository(db_connection),
+            now_provider=lambda: "2026-08-04T00:00:00Z",
+            uuid_provider=fake_uuid,
+        )
+        archive_root = tmp_path / "99_归档"
+        archive_root.mkdir()
+        (archive_root / "子目录").mkdir()
+        outside = tmp_path / "其他"
+        outside.mkdir()
+
+        root_unit = svc.create_content_unit(archive_root)
+        child_unit = svc.create_content_unit(archive_root / "child.7z")
+        nested_unit = svc.create_content_unit(archive_root / "子目录" / "nested.zip")
+        outside_unit = svc.create_content_unit(outside / "keep.7z")
+
+        count = svc.unmark_path_and_descendants(archive_root)
+
+        assert count == 3
+        assert svc._repo.get_by_id(root_unit.id) is None  # noqa: SLF001
+        assert svc._repo.get_by_id(child_unit.id) is None  # noqa: SLF001
+        assert svc._repo.get_by_id(nested_unit.id) is None  # noqa: SLF001
+        # 归档根之外的记录不受影响
+        assert svc._repo.get_by_id(outside_unit.id) is not None  # noqa: SLF001
+
+    def test_deletes_file_unit_itself(self, db_connection, tmp_path: Path) -> None:
+        """对单个文件路径调用时仅删除该文件记录（含自身）。"""
+        from application.content_service import ContentService
+        from infrastructure.repositories.content_unit import ContentUnitRepository
+
+        svc = ContentService(
+            ContentUnitRepository(db_connection),
+            now_provider=lambda: "2026-08-04T00:00:00Z",
+            uuid_provider=lambda: "uuid-archive-file",
+        )
+        mod = tmp_path / "mod.7z"
+        mod.write_bytes(b"data")
+        unit = svc.create_content_unit(mod)
+
+        count = svc.unmark_path_and_descendants(mod)
+
+        assert count == 1
+        assert svc._repo.get_by_id(unit.id) is None  # noqa: SLF001
+        # 不删除真实文件
+        assert mod.exists()
+
+    def test_cascades_tags(self, db_connection, tmp_path: Path) -> None:
+        """删除记录级联清理 content_unit_tag。"""
+        from application.content_service import ContentService
+        from infrastructure.repositories.content_unit import ContentUnitRepository
+
+        svc = ContentService(
+            ContentUnitRepository(db_connection),
+            now_provider=lambda: "2026-08-04T00:00:00Z",
+            uuid_provider=lambda: "uuid-archive-tag",
+        )
+        archive_root = tmp_path / "99_归档"
+        archive_root.mkdir()
+        unit = svc.create_content_unit(archive_root / "mod.7z")
+        db_connection.execute(
+            "INSERT INTO tag_category (id, name, color_hex) VALUES (?, ?, ?)",
+            ("cat-archive", "测试分类", "#D61A1A"),
+        )
+        db_connection.execute(
+            "INSERT INTO tag (id, name, category_id) VALUES (?, ?, ?)",
+            ("tag-archive", "测试标签", "cat-archive"),
+        )
+        db_connection.execute(
+            "INSERT INTO content_unit_tag (content_unit_id, tag_id) VALUES (?, ?)",
+            (unit.id, "tag-archive"),
+        )
+        db_connection.commit()
+
+        svc.unmark_path_and_descendants(archive_root)
+        db_connection.commit()
+
+        rows = db_connection.execute(
+            "SELECT * FROM content_unit_tag WHERE content_unit_id = ?",
+            (unit.id,),
+        ).fetchall()
+        assert len(rows) == 0
+
+
 class TestListByPathPrefixNormalized:
     """TD-H7 修复回归测试。
 
@@ -1108,7 +947,7 @@ class TestListByPathPrefixNormalized:
         child = folder / "mod.7z"
         # DB 存正斜杠形式
         posix_child = str(child).replace("\\", "/")
-        repo.create(_make_unit("c1", posix_child, title="child"))
+        repo.create(_make_unit("c1", posix_child))
 
         # 用反斜杠查询（Windows 原生 str(Path)）
         result = repo.list_by_path_prefix_normalized(str(folder))
@@ -1122,7 +961,7 @@ class TestListByPathPrefixNormalized:
         """同分隔符（Windows 均反斜杠）：新方法与原方法行为一致。"""
         folder = tmp_path / "ModGroup"
         child = folder / "mod.7z"
-        repo.create(_make_unit("c1", str(child), title="child"))
+        repo.create(_make_unit("c1", str(child)))
 
         result = repo.list_by_path_prefix_normalized(str(folder))
         assert len(result) == 1
@@ -1135,8 +974,8 @@ class TestListByPathPrefixNormalized:
         """
         mods = tmp_path / "Mods"
         mods2 = tmp_path / "Mods2"
-        repo.create(_make_unit("u1", str(mods / "armor.7z"), title="armor"))
-        repo.create(_make_unit("u2", str(mods2 / "other.7z"), title="other"))
+        repo.create(_make_unit("u1", str(mods / "armor.7z")))
+        repo.create(_make_unit("u2", str(mods2 / "other.7z")))
 
         result = repo.list_by_path_prefix_normalized(str(mods))
         assert len(result) == 1
@@ -1176,9 +1015,7 @@ class TestListByPathPrefixNormalized:
             ContentUnit(
                 id="stale-child-sep-divergence",
                 path=posix_child_path,
-                title="child",
                 content_type="mod",
-                is_marked=True,
                 created_at="2026-07-14T00:00:00Z",
                 updated_at="2026-07-14T00:00:00Z",
             )
@@ -1199,65 +1036,12 @@ class TestListByPathPrefixNormalized:
 
 
 class TestUpdateMetadata:
-    def test_update_title(self, service: ContentService, db_connection: sqlite3.Connection) -> None:
-        unit = _make_unit("u1", "/mods/a")
-        db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES (?, ?, ?, 1, ?, ?)",
-            (unit.id, unit.path, make_path_key(unit.path), unit.created_at, unit.updated_at),
-        )
-        db_connection.commit()
-
-        updated = service.update_metadata("u1", title="中文名")
-        assert updated.title == "中文名"
-        assert updated.updated_at != unit.updated_at  # updated_at 已更新
-
-    def test_update_title_strips_whitespace(
-        self, service: ContentService, db_connection: sqlite3.Connection
-    ) -> None:
-        db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', '/mods/a', '/mods/a', 1, 't', 't')"
-        )
-        db_connection.commit()
-
-        updated = service.update_metadata("u1", title="  中文名  ")
-        assert updated.title == "中文名"
-
-    def test_update_title_empty_clears(
-        self, service: ContentService, db_connection: sqlite3.Connection
-    ) -> None:
-        """空字符串 title 应清空（设为 None）。"""
-        db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, title, is_marked, "
-            "created_at, updated_at) "
-            "VALUES ('u1', '/mods/a', '/mods/a', '原标题', 1, 't', 't')"
-        )
-        db_connection.commit()
-
-        updated = service.update_metadata("u1", title="")
-        assert updated.title is None
-
-    def test_update_title_too_long_raises(
-        self, service: ContentService, db_connection: sqlite3.Connection
-    ) -> None:
-        from application.errors import InvalidMetadataError
-
-        db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', '/mods/a', '/mods/a', 1, 't', 't')"
-        )
-        db_connection.commit()
-
-        with pytest.raises(InvalidMetadataError):
-            service.update_metadata("u1", title="x" * 201)
-
     def test_update_source_url(
         self, service: ContentService, db_connection: sqlite3.Connection
     ) -> None:
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', '/mods/a', '/mods/a', 1, 't', 't')"
+            "INSERT INTO content_unit (id, path, path_key, created_at, updated_at) "
+            "VALUES ('u1', '/mods/a', '/mods/a', 't', 't')"
         )
         db_connection.commit()
 
@@ -1266,8 +1050,8 @@ class TestUpdateMetadata:
 
     def test_update_notes(self, service: ContentService, db_connection: sqlite3.Connection) -> None:
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', '/mods/a', '/mods/a', 1, 't', 't')"
+            "INSERT INTO content_unit (id, path, path_key, created_at, updated_at) "
+            "VALUES ('u1', '/mods/a', '/mods/a', 't', 't')"
         )
         db_connection.commit()
 
@@ -1278,9 +1062,9 @@ class TestUpdateMetadata:
         self, service: ContentService, db_connection: sqlite3.Connection
     ) -> None:
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, notes, is_marked, "
+            "INSERT INTO content_unit (id, path, path_key, notes, "
             "created_at, updated_at) "
-            "VALUES ('u1', '/mods/a', '/mods/a', '旧备注', 1, 't', 't')"
+            "VALUES ('u1', '/mods/a', '/mods/a', '旧备注', 't', 't')"
         )
         db_connection.commit()
 
@@ -1292,15 +1076,14 @@ class TestUpdateMetadata:
     ) -> None:
         """None 参数表示不改，应保留原值。"""
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, title, source_url, notes, is_marked, "
+            "INSERT INTO content_unit (id, path, path_key, source_url, notes, "
             "created_at, updated_at) "
-            "VALUES ('u1', '/mods/a', '/mods/a', '原标题', 'https://a.com', '原备注', 1, 't', 't')"
+            "VALUES ('u1', '/mods/a', '/mods/a', 'https://a.com', '原备注', 't', 't')"
         )
         db_connection.commit()
 
         # 仅更新 cover_path（这里 None，不改）
         updated = service.update_metadata("u1")
-        assert updated.title == "原标题"
         assert updated.source_url == "https://a.com"
         assert updated.notes == "原备注"
 
@@ -1308,7 +1091,7 @@ class TestUpdateMetadata:
         from application.errors import ContentUnitNotFoundError
 
         with pytest.raises(ContentUnitNotFoundError):
-            service.update_metadata("nonexistent", title="x")
+            service.update_metadata("nonexistent", source_url="x")
 
 
 class TestUpdateMetadataCoverPath:
@@ -1325,8 +1108,8 @@ class TestUpdateMetadataCoverPath:
         cover.write_bytes(b"\x00")
 
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', ?, ?, 1, 't', 't')",
+            "INSERT INTO content_unit (id, path, path_key, created_at, updated_at) "
+            "VALUES ('u1', ?, ?, 't', 't')",
             (str(unit_dir), make_path_key(str(unit_dir))),
         )
         db_connection.commit()
@@ -1340,9 +1123,9 @@ class TestUpdateMetadataCoverPath:
         db_connection: sqlite3.Connection,
     ) -> None:
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, cover_path, is_marked, "
+            "INSERT INTO content_unit (id, path, path_key, cover_path, "
             "created_at, updated_at) "
-            "VALUES ('u1', '/mods/a', '/mods/a', 'old.jpg', 1, 't', 't')"
+            "VALUES ('u1', '/mods/a', '/mods/a', 'old.jpg', 't', 't')"
         )
         db_connection.commit()
 
@@ -1381,7 +1164,6 @@ class TestUpdateMetadataCoverPath:
                 id="u-m4",
                 path=str(unit_dir),
                 cover_path="cover_old.jpg",
-                is_marked=True,
                 created_at="2026-07-01T00:00:00Z",
                 updated_at="2026-07-01T00:00:00Z",
             )
@@ -1443,7 +1225,6 @@ class TestUpdateMetadataCoverPath:
             ContentUnit(
                 id="u-m4-none",
                 path=str(unit_dir),
-                is_marked=True,
                 created_at="2026-07-01T00:00:00Z",
                 updated_at="2026-07-01T00:00:00Z",
             )
@@ -1491,7 +1272,6 @@ class TestUpdateMetadataCoverPath:
                 id="u-m4-nochange",
                 path=str(unit_dir),
                 cover_path="cover.jpg",
-                is_marked=True,
                 created_at="2026-07-01T00:00:00Z",
                 updated_at="2026-07-01T00:00:00Z",
             )
@@ -1518,8 +1298,8 @@ class TestUpdateMetadataCoverPath:
         )
 
         svc = ContentService(repo, thumbnail_service=thumb_service)
-        # 仅更新 title（不改 cover_path）
-        svc.update_metadata("u-m4-nochange", title="新标题")
+        # 仅更新 notes（不改 cover_path）
+        svc.update_metadata("u-m4-nochange", notes="新备注")
 
         # 缓存应仍存在（未触发 invalidate）
         assert cache_repo.get_by_id_and_size("u-m4-nochange", 256) is not None
@@ -1536,8 +1316,8 @@ class TestUpdateMetadataCoverPath:
         unit_dir.mkdir()
 
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', ?, ?, 1, 't', 't')",
+            "INSERT INTO content_unit (id, path, path_key, created_at, updated_at) "
+            "VALUES ('u1', ?, ?, 't', 't')",
             (str(unit_dir), make_path_key(str(unit_dir))),
         )
         db_connection.commit()
@@ -1559,8 +1339,8 @@ class TestUpdateMetadataCoverPath:
         cover.write_bytes(b"\x00")
 
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', ?, ?, 1, 't', 't')",
+            "INSERT INTO content_unit (id, path, path_key, created_at, updated_at) "
+            "VALUES ('u1', ?, ?, 't', 't')",
             (str(unit_dir), make_path_key(str(unit_dir))),
         )
         db_connection.commit()
@@ -1582,8 +1362,8 @@ class TestUpdateMetadataCoverPath:
         outside.write_bytes(b"\x00")
 
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', ?, ?, 1, 't', 't')",
+            "INSERT INTO content_unit (id, path, path_key, created_at, updated_at) "
+            "VALUES ('u1', ?, ?, 't', 't')",
             (str(unit_dir), make_path_key(str(unit_dir))),
         )
         db_connection.commit()
@@ -1604,8 +1384,8 @@ class TestUpdateMetadataCoverPath:
         (unit_dir / "cover.txt").write_bytes(b"\x00")
 
         db_connection.execute(
-            "INSERT INTO content_unit (id, path, path_key, is_marked, created_at, updated_at) "
-            "VALUES ('u1', ?, ?, 1, 't', 't')",
+            "INSERT INTO content_unit (id, path, path_key, created_at, updated_at) "
+            "VALUES ('u1', ?, ?, 't', 't')",
             (str(unit_dir), make_path_key(str(unit_dir))),
         )
         db_connection.commit()

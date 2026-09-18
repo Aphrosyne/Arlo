@@ -82,7 +82,7 @@ class TestConstruction:
 
     def test_with_existing_data_hides_hint(self, tag_dialog_env, qapp) -> None:
         service, conn = tag_dialog_env
-        cat = service.create_category("服装护甲", color_hue=210)
+        cat = service.create_category("服装护甲", color_hex="#1A78D6")
         service.create_tag("重甲", cat.id)
         service.create_tag("轻甲", cat.id)
         conn.commit()
@@ -170,11 +170,13 @@ class TestMakeItems:
     def test_category_item_stores_entity_and_color_icon(self, tag_dialog_env) -> None:
         service, conn = tag_dialog_env
         dialog = TagManagerDialog(service, parent=None)
-        cat = TagCategory(id="c-1", name="服装护甲", color_hue=210)
+        cat = TagCategory(id="c-1", name="服装护甲", color_hex="#1A78D6")
         item = dialog._make_category_item(cat)
         assert item.data(0, Qt.UserRole + 2) is True  # _ROLE_IS_CATEGORY
         stored_cat = item.data(0, Qt.UserRole)
         assert stored_cat.id == "c-1"
+        # BugFix2：节点文本为纯分类名（去掉 H= 调试信息），颜色由色块图标表达
+        assert item.text(0) == "服装护甲"
         # 色块图标存在
         assert not item.icon(0).isNull()
         dialog.close()
@@ -240,8 +242,8 @@ class TestOnAddCategory:
 
         # 模拟 QInputDialog.getText 返回 ("新分类", True)
         monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("新分类", True))
-        # 模拟 _ask_color_hue 返回 100（绕过 QColorDialog）
-        monkeypatch.setattr(dialog, "_ask_color_hue", lambda default=210: 100)
+        # 模拟 _ask_color_hex 返回颜色（绕过选色对话框）
+        monkeypatch.setattr(dialog, "_ask_color_hex", lambda default="#1A78D6": "#1AD61A")
 
         dialog._on_add_category()
         conn.commit()
@@ -249,7 +251,7 @@ class TestOnAddCategory:
         cats = service.list_categories()
         assert len(cats) == 1
         assert cats[0].name == "新分类"
-        assert cats[0].color_hue == 100
+        assert cats[0].color_hex == "#1AD61A"
         dialog.close()
 
     def test_skips_when_user_cancels_input(self, tag_dialog_env, monkeypatch) -> None:
@@ -269,7 +271,7 @@ class TestOnAddCategory:
 
         # 输入有效名称，但颜色对话框被取消
         monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("新分类", True))
-        monkeypatch.setattr(dialog, "_ask_color_hue", lambda default=210: None)
+        monkeypatch.setattr(dialog, "_ask_color_hex", lambda default="#1A78D6": None)
         dialog._on_add_category()
         # 未创建任何分类
         assert service.list_categories() == []
@@ -283,7 +285,7 @@ class TestOnAddCategory:
         dialog = TagManagerDialog(service, parent=None)
 
         monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("已存在", True))
-        monkeypatch.setattr(dialog, "_ask_color_hue", lambda default=210: 100)
+        monkeypatch.setattr(dialog, "_ask_color_hex", lambda default="#1A78D6": "#1AD61A")
         # 拦截 QMessageBox.critical 避免阻塞
         critical_mock = MagicMock()
         monkeypatch.setattr(QMessageBox, "critical", critical_mock)

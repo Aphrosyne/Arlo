@@ -7,7 +7,13 @@
 - 不自动重命名图片。自动整理阶段不修改任何文件名，避免破坏用户已有命名。
 - 移除文件时统一移回暂存区根目录（不保留原子目录结构）。
 - 手动重命名预览图：`{Mod组名}.{扩展名}`，多张图片 `_2`、`_3` 后缀。
-- 装配面板绑定"当前选中 Mod 组"，整理模式下切换不同 Mod 组时刷新内容。
+- 装配面板绑定"当前选中文件夹"，切换选中时刷新内容（📌 钉住时保持绑定）。
+
+UX 重构 Phase 1 Task 2（装配面板语义调整）：
+- 装配面板从"Mod 组装配器"扩展为"文件夹透视器"，可透视任意文件夹（不限于内容单元）。
+- 新增 list_folder_files(path)：按路径列出文件夹内容，不依赖 ContentUnit。
+- bind_mod_group 仍用于内容单元文件夹（保留 unit 关联用于封面重命名）。
+- 非内容单元文件夹通过 list_folder_files + bind_folder 透视（无 unit 关联）。
 
 约束（AGENTS 规则）：
 - 不覆盖已有文件/目录（FileOperationService 已保证）。
@@ -33,8 +39,8 @@ from application.errors import (
     ContentUnitNotFoundError,
     InvalidContentUnitPathError,
 )
+from application.file_operation_service import FileOperationService
 from domain.models import ContentUnit, FileEntry
-from infrastructure.file_operation_service import FileOperationService
 from infrastructure.path_utils import make_path_key
 from infrastructure.repositories.content_unit import ContentUnitRepository
 
@@ -134,6 +140,40 @@ class AssemblyService:
         entries.sort(key=lambda e: (not e.is_dir, e.name.lower(), e.name))
         return entries
 
+    def list_folder_files(self, folder_path: Path) -> list[FileEntry]:
+        """列出任意文件夹内的所有文件和子文件夹条目（透视用，不依赖 ContentUnit）。
+
+        UX 重构 Phase 1 Task 2：装配面板语义扩展为"文件夹透视器"，
+        支持透视非内容单元文件夹。逻辑与 list_mod_group_files 一致，
+        但直接接受路径参数，无需 ContentUnit 关联。
+
+        Args:
+            folder_path: 待透视的文件夹路径。
+
+        Returns:
+            FileEntry 列表（文件夹在前，名称升序）。路径不可访问时返回空列表。
+        """
+        try:
+            if not folder_path.is_dir():
+                logger.warning("list_folder_files: 路径不是目录：%s", folder_path)
+                return []
+        except OSError as e:
+            logger.warning("list_folder_files: 路径检查失败 %s: %s", folder_path, e)
+            return []
+
+        entries: list[FileEntry] = []
+        try:
+            for child in folder_path.iterdir():
+                entry = self._build_entry(child)
+                if entry is not None:
+                    entries.append(entry)
+        except OSError as e:
+            logger.warning("list_folder_files: 读取目录失败 %s: %s", folder_path, e)
+            return []
+
+        entries.sort(key=lambda e: (not e.is_dir, e.name.lower(), e.name))
+        return entries
+
     # --- 装配操作 ---
 
     def add_file(self, unit_id: str, src_path: Path) -> FileEntry:
@@ -157,7 +197,30 @@ class AssemblyService:
             FileOperationError: 其他文件操作失败。
         """
         unit = self._get_unit_or_raise(unit_id)
-        folder_path = Path(unit.path)
+        return self.add_file_by_folder_path(Path(unit.path), src_path)
+
+    def add_file_by_folder_path(self, folder_path: Path, src_path: Path) -> FileEntry:
+        """从源路径移动文件到指定文件夹（不依赖 ContentUnit）。
+
+        UX 重构 Phase 1 Task 4：支持「添加到钉住文件夹」功能，
+        钉住的文件夹可能不是内容单元，直接按路径移动。
+
+        - 源文件必须存在。
+        - 目标路径 = folder_path / src_path.name，不能已存在（AGENTS 规则 2）。
+        - Stage 4.5 H4：move 内部自动更新 folder_path 的 folder_cache mtime。
+        - 不自动重命名（spec §7.4：自动整理阶段不修改任何文件名）。
+
+        Args:
+            folder_path: 目标文件夹路径。
+            src_path: 源文件路径。
+
+        Returns:
+            移动后的 FileEntry（指向目标文件夹内的新路径）。
+
+        Raises:
+            ConflictError: 目标路径已存在同名文件。
+            FileOperationError: 其他文件操作失败。
+        """
         dst_path = folder_path / src_path.name
 
         # H4：move 内部自动更新 dst.parent（= folder_path）的 folder_cache mtime
@@ -172,35 +235,6 @@ class AssemblyService:
             size=None,
             content_unit=None,
         )
-
-    def remove_file(self, unit_id: str, filename: str, staging_path: Path) -> Path:
-        """从 Mod 组移除文件，移回暂存区根目录。
-
-        - 不保留原子目录结构（统一移到 staging_path 根目录）。
-        - 目标路径 = staging_path / filename，不能已存在。
-        - Stage 4.5 H4：move 内部自动更新源/目标父目录的 folder_cache mtime。
-
-        Args:
-            unit_id: Mod 组 ContentUnit ID。
-            filename: 待移除的文件名（不含目录路径）。
-            staging_path: 暂存区根目录路径。
-
-        Returns:
-            文件移回后的新路径。
-
-        Raises:
-            ContentUnitNotFoundError: unit_id 不存在。
-            ConflictError: 暂存区根目录已存在同名文件。
-            FileOperationError: 其他文件操作失败。
-        """
-        unit = self._get_unit_or_raise(unit_id)
-        folder_path = Path(unit.path)
-        src_path = folder_path / filename
-        dst_path = staging_path / filename
-
-        # H4：move 内部自动更新 src.parent（= folder_path）和 dst.parent（= staging_path）的 mtime
-        self._file_op.move(src_path, dst_path)
-        return dst_path
 
     # --- 手动重命名预览图 ---
 
@@ -228,19 +262,37 @@ class AssemblyService:
             FileOperationError: 其他文件操作失败。
         """
         unit = self._get_unit_or_raise(unit_id)
-        folder_path = Path(unit.path)
+        return self.rename_as_cover_by_path(Path(unit.path), image_path)
 
-        # 校验 image_path 在 Mod 组文件夹内
+    def rename_as_cover_by_path(self, folder_path: Path, image_path: Path) -> Path:
+        """按文件夹名重命名图片（不依赖 ContentUnit，UX 重构 Task 2 文件夹透视器）。
+
+        逻辑与 rename_as_cover 一致，但直接接受 folder_path 参数，
+        支持非内容单元文件夹的图片重命名封面。
+
+        Args:
+            folder_path: 待透视的文件夹路径。
+            image_path: 待重命名的图片完整路径（必须在 folder_path 内）。
+
+        Returns:
+            重命名后的新路径。
+
+        Raises:
+            InvalidContentUnitPathError: image_path 不在 folder_path 内或非图片。
+            ConflictError: 目标名称已存在。
+            FileOperationError: 其他文件操作失败。
+        """
+        # 校验 image_path 在文件夹内
         if not _is_in_directory(image_path, folder_path):
             raise InvalidContentUnitPathError(
-                f"图片不在 Mod 组文件夹内：{image_path} 不在 {folder_path} 内"
+                f"图片不在文件夹内：{image_path} 不在 {folder_path} 内"
             )
 
         # 校验为图片
         if not is_image_file(image_path):
             raise InvalidContentUnitPathError(f"文件不是支持的图片格式：{image_path}")
 
-        # Mod 组名 = 文件夹名（与 ContentUnitCreationService 一致）
+        # 文件夹名作为新名（与 ContentUnitCreationService 一致）
         mod_name = folder_path.name
         ext = image_path.suffix  # 保留原扩展名（含点）
 

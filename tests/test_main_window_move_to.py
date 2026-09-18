@@ -22,16 +22,18 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import Qt  # noqa: E402
-from PySide6.QtWidgets import QDialog, QMessageBox  # noqa: E402
+from PySide6.QtCore import QSettings, Qt  # noqa: E402
+from PySide6.QtWidgets import QDialog, QMenu, QMessageBox  # noqa: E402
 
+from app import ui_constants as ui  # noqa: E402
 from app.main_window import MainWindow  # noqa: E402
+from app.recent_move_targets import RecentMoveTargets  # noqa: E402
 from application.content_service import ContentService  # noqa: E402
+from application.file_operation_service import FileOperationService  # noqa: E402
 from application.folder_tree_service import FolderTreeService  # noqa: E402
 from application.managed_root_service import ManagedRootService  # noqa: E402
 from application.scan_service import ScanService  # noqa: E402
 from infrastructure.db import get_connection, init_db  # noqa: E402
-from infrastructure.file_operation_service import FileOperationService  # noqa: E402
 from infrastructure.folder_cache_sync_helper import FolderCacheSyncHelper  # noqa: E402
 from infrastructure.repositories.content_unit import ContentUnitRepository  # noqa: E402
 from infrastructure.repositories.folder_cache import FolderCacheRepository  # noqa: E402
@@ -80,6 +82,8 @@ def move_to_env(qapp, tmp_path: Path):
 
     managed_service = ManagedRootService(
         ManagedRootRepository(conn),
+        FolderCacheRepository(conn),
+        ContentUnitRepository(conn),
         now_provider=lambda: "2026-07-30T00:00:00Z",
         uuid_provider=fake_uuid,
     )
@@ -433,6 +437,8 @@ class TestShortcutRegistration:
 
         managed_service = ManagedRootService(
             ManagedRootRepository(conn),
+            FolderCacheRepository(conn),
+            ContentUnitRepository(conn),
             now_provider=lambda: "2026-07-30T00:00:00Z",
             uuid_provider=fake_uuid,
         )
@@ -534,3 +540,184 @@ class TestUIRefresh:
         }
         assert "file1.7z" not in names
         assert "file2.7z" in names  # file2 应保留
+
+
+# === 最近移动目标（操作便捷性3，2026-08-02） ===
+
+
+def _isolate_recent_targets(window: MainWindow, tmp_path: Path) -> None:
+    """替换 window 的最近目标记录为临时 ini 隔离实例（避免污染真实 QSettings）。"""
+    ini = tmp_path / "recent.ini"
+    window._recent_move_targets = RecentMoveTargets(  # noqa: SLF001
+        QSettings(str(ini), QSettings.Format.IniFormat)
+    )
+
+
+def test_move_records_recent_target(qapp, move_to_env, tmp_path: Path) -> None:
+    """_perform_move_to 成功后记录最近移动目标。"""
+    window, conn, root_dir, _, _ = move_to_env
+    _isolate_recent_targets(window, tmp_path)
+    _select_stash(qapp, window)
+    qapp.processEvents()
+
+    src = root_dir / "Stash" / "file1.7z"
+    target = root_dir / "Target"
+
+    window._perform_move_to([src], target)  # noqa: SLF001
+    qapp.processEvents()
+
+    assert window._recent_move_targets.latest() == str(target)  # noqa: SLF001
+    assert not src.exists()
+    assert (target / "file1.7z").exists()
+
+
+def test_ctrl_q_without_recent_target_shows_hint(qapp, move_to_env, tmp_path: Path) -> None:
+    """Ctrl+Q 无最近目标 → 状态栏提示。"""
+    window, _, root_dir, _, _ = move_to_env
+    _isolate_recent_targets(window, tmp_path)
+    _select_stash(qapp, window)
+    _select_entry(qapp, window, "file1.7z")
+    qapp.processEvents()
+
+    window._on_shortcut_move_to_latest()  # noqa: SLF001
+    qapp.processEvents()
+
+    assert ui.SHORTCUT_MOVE_TO_LATEST_NO_TARGET in window.statusBar().currentMessage()
+
+
+def test_ctrl_q_moves_to_latest(qapp, move_to_env, tmp_path: Path) -> None:
+    """Ctrl+Q 有最近目标 → 直接移动到最近目标。"""
+    window, _, root_dir, _, _ = move_to_env
+    _isolate_recent_targets(window, tmp_path)
+    target = root_dir / "Target"
+    window._recent_move_targets.record(str(target))  # noqa: SLF001
+    _select_stash(qapp, window)
+    _select_entry(qapp, window, "file1.7z")
+    qapp.processEvents()
+
+    window._on_shortcut_move_to_latest()  # noqa: SLF001
+    qapp.processEvents()
+
+    assert not (root_dir / "Stash" / "file1.7z").exists()
+    assert (target / "file1.7z").exists()
+
+
+def test_ctrl_q_same_dir_auto_skips_without_dialog(
+    qapp, move_to_env, tmp_path: Path, monkeypatch
+) -> None:
+    """快速移动目标=文件所在目录 → 自动跳过，不弹「覆盖/跳过/重命名」对话框（2026-08-04 反馈）。"""
+    window, _, root_dir, _, _ = move_to_env
+    _isolate_recent_targets(window, tmp_path)
+    # 最近目标 = Stash（file1.7z 所在目录）→ 移动到自身所在目录 = 无操作
+    window._recent_move_targets.record(str(root_dir / "Stash"))  # noqa: SLF001
+    _select_stash(qapp, window)
+    _select_entry(qapp, window, "file1.7z")
+    qapp.processEvents()
+
+    def _fail_dialog(*args, **kwargs):  # noqa: ANN002, ANN003 - 仅用于断言不弹窗
+        raise AssertionError("同位置移动不应弹出冲突对话框")
+
+    monkeypatch.setattr("app.conflict_resolution_dialog.ConflictResolutionDialog", _fail_dialog)
+
+    window._on_shortcut_move_to_latest()  # noqa: SLF001
+    qapp.processEvents()
+
+    # 文件仍在原目录，未被移动（自动跳过）
+    assert (root_dir / "Stash" / "file1.7z").is_file()
+
+
+def test_ctrl_q_tree_moves_selected_directory(qapp, move_to_env, tmp_path: Path) -> None:
+    """Ctrl+Q 目录树聚焦时 → 移动树选中节点并刷新目录树（BugFix1）。"""
+    window, conn, root_dir, _, _ = move_to_env
+    _isolate_recent_targets(window, tmp_path)
+    target = root_dir / "Target"
+    window._recent_move_targets.record(str(target))  # noqa: SLF001
+    window.show()
+    window.activateWindow()
+    _select_stash(qapp, window)
+    window._tree_view.setFocus()  # noqa: SLF001
+    qapp.processEvents()
+    assert window._tree_view.hasFocus()  # noqa: SLF001
+
+    window._on_shortcut_move_to_latest()  # noqa: SLF001
+    qapp.processEvents()
+
+    # Stash 目录移动到 Target 下
+    assert (target / "Stash").is_dir()
+    assert (target / "Stash" / "file1.7z").is_file()
+    assert not (root_dir / "Stash").exists()
+    # folder_cache（目录树数据源）已同步：旧路径行删除、新路径行存在
+    stale = conn.execute(
+        "SELECT COUNT(*) AS n FROM folder_cache WHERE path = ?",
+        (str(root_dir / "Stash"),),
+    ).fetchone()["n"]
+    assert stale == 0
+    moved = conn.execute(
+        "SELECT COUNT(*) AS n FROM folder_cache WHERE path = ?",
+        (str(target / "Stash"),),
+    ).fetchone()["n"]
+    assert moved == 1
+
+
+def test_ctrl_q_uses_middle_selection_when_tree_not_focused(
+    qapp, move_to_env, tmp_path: Path
+) -> None:
+    """目录树未聚焦时 Ctrl+Q → 移动中栏选中条目（树选中忽略）。"""
+    window, _, root_dir, _, _ = move_to_env
+    _isolate_recent_targets(window, tmp_path)
+    target = root_dir / "Target"
+    window._recent_move_targets.record(str(target))  # noqa: SLF001
+    window.show()
+    window.activateWindow()
+    _select_stash(qapp, window)
+    _select_entry(qapp, window, "file1.7z")
+    window._content_view.setFocus()  # noqa: SLF001
+    qapp.processEvents()
+    assert not window._tree_view.hasFocus()  # noqa: SLF001
+
+    window._on_shortcut_move_to_latest()  # noqa: SLF001
+    qapp.processEvents()
+
+    # 移动的是中栏文件，树节点 Stash 未被移动
+    assert not (root_dir / "Stash" / "file1.7z").exists()
+    assert (target / "file1.7z").exists()
+    assert (root_dir / "Stash").is_dir()
+
+
+def test_recent_submenu_inserted_after_move_to(qapp, move_to_env, tmp_path: Path) -> None:
+    """右键菜单在「移动到...」后插入「移动到最近目录」子菜单。"""
+    window, _, root_dir, _, _ = move_to_env
+    _isolate_recent_targets(window, tmp_path)
+    window._recent_move_targets.record(str(root_dir / "Target"))  # noqa: SLF001
+    window._recent_move_targets.record(str(root_dir / "Other"))  # noqa: SLF001
+
+    menu = QMenu()
+    move_action = menu.addAction(ui.MENU_MOVE_TO)
+    window._insert_recent_move_submenu(menu, [root_dir / "Stash" / "file1.7z"])  # noqa: SLF001
+
+    # 找到子菜单 action，位于「移动到...」之后
+    actions = menu.actions()
+    recent_action = None
+    for i, act in enumerate(actions):
+        if act.menu() is not None and act.menu().title() == ui.MENU_MOVE_TO_RECENT:
+            recent_action = act
+            assert i > actions.index(move_action)
+            break
+    assert recent_action is not None
+    submenu = recent_action.menu()
+    assert submenu is not None
+    assert len(submenu.actions()) == 2
+    # 最近使用顺序：Other 最新置顶
+    assert submenu.actions()[0].toolTip() == str(root_dir / "Other")
+
+
+def test_no_recent_targets_no_submenu(qapp, move_to_env, tmp_path: Path) -> None:
+    """无最近目标时不插入子菜单。"""
+    window, _, root_dir, _, _ = move_to_env
+    _isolate_recent_targets(window, tmp_path)
+
+    menu = QMenu()
+    menu.addAction(ui.MENU_MOVE_TO)
+    window._insert_recent_move_submenu(menu, [root_dir / "Stash" / "file1.7z"])  # noqa: SLF001
+
+    assert len(menu.actions()) == 1

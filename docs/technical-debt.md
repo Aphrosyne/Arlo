@@ -322,10 +322,11 @@
 > 以下问题来自 Stage 3 正式 Code Review，经评估不阻塞 Stage 4 启动，
 > 但建议在对应阶段择机处理。编号接续既有 TD 序列。
 
-### TD-M21: MainWindow God Object 趋势（1570 行 / 76 方法）
+### TD-M21: MainWindow God Object 趋势 ✅ 已处理（UX 重构 Task 7，v0.48.0；第二轮 2026-08-04）
 
 - **位置**: [main_window.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/main_window.py)
-- **背景**: Stage 3 Code Review 发现 MainWindow 已增长到 1570 行 / 76 方法，
+- **背景**: Stage 3 Code Review 发现 MainWindow 已增长到约 3490 行 / 150 方法
+  （2026-08-01 复核，原登记 1570 行 / 76 方法已过时），
   承担 UI 搭建、信号槽、扫描线程生命周期、装配面板绑定、快速插入流程、
   元数据展示、Elide 渲染、模式切换、DB 事务边界（`_commit`/`_rollback`）等
   多重职责。Stage 4 还要加搜索栏、标签筛选、评分控件、备注编辑器；
@@ -338,8 +339,20 @@
   `MetadataView`（元数据 + Elide 渲染）、`ModeController`（模式切换 + hint）。
   `_commit` / `_rollback` 移到 `UnitOfWork` 或 `TransactionScope`，UI 持有
   其引用而非裸 connection。
-- **建议修复阶段**: **Stage 4 中期**（在加搜索/标签 UI 之前先拆分，
-  避免新功能继续堆进 MainWindow）。
+- **建议修复阶段**: **UX 重构 Task 7**（Q8:C 决策"边开发边小规模拆分"未执行，
+  已由用户决策归入 UI 重构版本统一处理）。
+- **处理（UX 重构 Task 7，v0.48.0）**: TransactionScope / ScanController /
+  AssemblyController / MetadataView 已拆出；MainWindow 保留薄委托与文件操作编排，
+  行数继续下降，可进一步瘦身。
+- **处理（第二轮，2026-08-04 独立重构）**: 继续拆出 12 个模块
+  （content_views / navigation_controller / view_state_controller / search_controller /
+  tree_roots_controller / context_menu_builder / file_operations_controller /
+  content_list_controller / metadata_helpers / entry_dialogs / shortcut_registry /
+  scan_ui_state）；`_setup_ui` 拆为 `_build_*` 子方法。MainWindow 由 3710 行降至
+  **1985 行 / 174 方法 / 76 个实例变量**（2026-08-04 实测），保留窗口装配、薄委托、
+  测试接口与少量窗口级 handler（装配回调残量、`_on_batch_tag`、`_on_open_in_explorer`
+  等受既有测试命名空间补丁约束保留）。全部 247 个 main_window 测试与全量
+  1449 个测试保持通过。
 
 ### TD-M22: folder_cache 同步辅助逻辑在多个 Service 中重复 ✅ 已修复（Stage 4.5）
 
@@ -413,7 +426,7 @@
 - **影响范围**: 不影响当前正确性，但影响回归保障。
 - **推荐修复方案**: 至少加 `MainWindow` 的轻量级集成测试（用 `QTest`
   模拟点击 / 选中），覆盖快速插入按钮状态机和装配面板绑定流程。
-- **建议修复阶段**: **Stage 4 中期**（与 TD-M21 拆分同步进行，
+- **建议修复阶段**: **UX 重构 Task 7**（与 TD-M21 拆分同步进行，
   拆分后更易为各 Controller 写测试）。
 
 ### TD-M27: SQLite 并发写未测试（ScanWorker 独立连接 vs 主线程连接）
@@ -497,7 +510,7 @@
   ContentUnitRepository.create / update 自动计算 path_key。DB 层强制路径归一化唯一，
   消除应用层兜底的不完全保障。
 
-### TD-H10: FileOperationService 分层归属
+### TD-H10: FileOperationService 分层归属 ✅ 已修复（UX 重构 Task 7 Commit 2）
 
 - **位置**: [file_operation_service.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/infrastructure/file_operation_service.py)
 - **背景**: `FileOperationService` 位于 infrastructure 层，但 Stage 4.5 H4
@@ -506,9 +519,9 @@
   但长期来看 `FileOperationService` 应移到 application 层。
 - **影响范围**: 架构层次不清，但不影响正确性。Stage 5 文件操作重构时
   （rename/delete/undo）会进一步增加耦合。
-- **推荐修复方案**: Stage 5 文件操作功能实现时，将 `FileOperationService`
-  移到 application 层，`FolderCacheSyncHelper` 一并迁移。
-- **建议修复阶段**: **Stage 5 文件操作重构时**（D5 决策 B：延后处理）。
+- **修复（UX 重构 Task 7 Commit 2）**: `FileOperationService` 从 `infrastructure/`
+  迁移到 `application/`（消除 infrastructure → application 反向依赖；
+  `FolderCacheSyncHelper` 保持 infrastructure，仅依赖 FolderCacheRepository）。
 
 ### TD-M28: 多处 N+1 查询
 
@@ -583,13 +596,17 @@
 - **推荐修复方案**: 引入"补偿日志"机制（记录文件已成功移动但 DB 未更新），下次启动时尝试补偿；或在错误提示中明确告知用户"文件已移动但元数据更新失败，请手动刷新或重新扫描"。
 - **建议修复阶段**: **Stage 6 或后续迭代**（数据一致性版本）。
 
-### TD-M31: MainWindow 业务逻辑泄漏 ✅ 已登记（UI 重构版本处理）
+### TD-M31: MainWindow 业务逻辑泄漏 ✅ 已处理（UX 重构 Task 7，v0.48.0；第二轮 2026-08-04）
 
 - **位置**: [main_window.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/main_window.py)
-- **背景**: MainWindow 3823 行、95 个方法、60+ 实例变量、6 个并行状态机。承担 21 处 `_commit()` + 文件操作编排 + 冲突解决编排（2 个重复方法）。Stage 4/5 期间 Q8:C 决策"边开发边小规模拆分"实际未执行，反而新增了快捷键 handler（14 个）、导航历史栈等逻辑。
+- **背景**: MainWindow 约 3490 行、150 个方法、60+ 实例变量、6 个并行状态机
+  （2026-08-01 复核，原登记 3823 行 / 95 方法已过时）。承担 21 处 `_commit()` + 文件操作编排 + 冲突解决编排（2 个重复方法）。Stage 4/5 期间 Q8:C 决策"边开发边小规模拆分"实际未执行，反而新增了快捷键 handler（14 个）、导航历史栈等逻辑。
 - **影响范围**: 任何 UI 改动成本极高，且 UI 层承担了本应在 Application 层的事务边界职责。
 - **推荐修复方案**: UI 重构版本前置任务。至少拆出 `ScanController` / `AssemblyController` / `MetadataView` / `ModeController` / `TransactionScope`（事务边界从 UI 移到 Application 层）。
 - **建议修复阶段**: **UI 重构版本（前置）**（用户决策：UI 重构单独开分支处理）。
+- **处理（第二轮，2026-08-04）**: 文件操作编排（新建/重命名/删除/粘贴/移动到/撤销）、
+  右键菜单构建、导航历史、视图状态、搜索、中栏内容联动、扫描 UI 状态等逻辑全部迁出；
+  MainWindow 保留同名薄委托，行为不变（全量 pytest 1449 passed）。
 
 ### TD-M32: UndoService 安全校验无 size/mtime 比对
 
@@ -615,13 +632,13 @@
 - **推荐修复方案**: 下次扫描优化时一并处理。
 - **建议修复阶段**: **下次扫描优化时**（非阻塞）。
 
-### TD-M35: rename 跨盘抛 FileOperationError，move 抛 CrossDriveError，异常类型不一致
+### TD-M35: rename 跨盘抛 FileOperationError，move 抛 CrossDriveError，异常类型不一致 ✅ 已修复（UX 重构 Task 7 Commit 2）
 
 - **位置**: [file_operation_service.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/infrastructure/file_operation_service.py) `rename` / `move`
 - **背景**: 同一语义的跨盘操作，rename 抛 `FileOperationError`，move 抛 `CrossDriveError`，UI 层需分别捕获。
 - **影响范围**: 不影响正确性，但异常处理代码冗余。
-- **推荐修复方案**: 统一异常类型。
-- **建议修复阶段**: **UI 重构版本**（与 TD-M31 一并处理）。
+- **修复（UX 重构 Task 7 Commit 2）**: `rename` 跨盘统一抛 `CrossDriveError`
+  （FileOperationError 子类），与 `move` 一致。
 
 ### TD-L23: content_unit.content_type 默认 'mod' 与实体名不一致
 
@@ -639,13 +656,14 @@
 - **推荐修复方案**: UI 重构时一并考虑。
 - **建议修复阶段**: **UI 重构时**（非阻塞）。
 
-### TD-L25: FileOperationService._sync_on_delete 访问 helper 私有 `_repo`
+### TD-L25: FileOperationService._sync_on_delete 访问 helper 私有 `_repo` ✅ 已修复（UX 重构 Task 7 Commit 2）
 
 - **位置**: [file_operation_service.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/infrastructure/file_operation_service.py) `_sync_on_delete`
 - **背景**: 通过 `self._helper._repo` 访问 FolderCacheSyncHelper 的私有 `_repo`，标注 `# noqa: SLF001`。
 - **影响范围**: 封装泄漏，但不影响正确性。
-- **推荐修复方案**: FolderCacheSyncHelper 增加"按路径前缀批量删除"语义化方法。
-- **建议修复阶段**: **UI 重构版本**（与 TD-H10 一并处理）。
+- **修复（UX 重构 Task 7 Commit 2）**: `FolderCacheSyncHelper` 新增语义化
+  `delete_folder_subtree(path)`（按路径前缀 + 深度降序删除），`_sync_on_delete`
+  改走公共方法，不再访问私有 `_repo`。
 
 ### TD-L26: time 字段后缀不统一（`_mtime` vs `_at`，REAL vs TEXT）
 
@@ -677,6 +695,109 @@
 - **背景**: Stage 5 Code Review M13 为 `ContentUnit.content_type` 添加了 Domain 层取值范围校验（`VALID_CONTENT_TYPES = frozenset({"mod"})`），与 `OperationHistory.operation_type` 的严格校验对齐。
 - **现状**：已修复，无需进一步处理。当前 `content_type` 仅 `'mod'`，未来扩展类型时需同步更新此集合。
 - **建议修复阶段**: **未来扩展类型时**（已修复，仅记录约定）。
+
+## UX 重构新增（2026-08-01）
+
+> 以下问题来自 UX 重构 Phase 1/2 实施与文档一致性复核，编号接续既有 TD 序列。
+
+### TD-M36: FileListView 未统一（FileListModel / AssemblyListModel 双模型）✅ 已修复（UX 重构 Task 7 Commit 2）
+
+- **位置**: [file_list_model.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/file_list_model.py) `FileListModel`（中栏）/ [assembly_panel.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/assembly_panel.py) `AssemblyListModel`（装配面板）
+- **背景**: UX 重构 Phase 1 Task 1 已登记但未编号。中栏 FileListModel 与装配面板
+  AssemblyListModel 两套模型各自维护，文件操作/右键菜单/拖拽逻辑需在两处同步修改。
+- **影响范围**: 可维护性，不影响正确性。
+- **修复（UX 重构 Task 7 Commit 2）**: 移除 `AssemblyListModel`，装配面板复用
+  `FileListModel(single_column=True)`（单列纯文件名 + 标准图标，视觉行为一致），
+  消除双模型维护。
+
+### TD-L30: Assembly* 代码标识符 legacy 命名（显示名已改为「文件夹预览」）✅ 已决策（v0.50.2）
+
+- **位置**: [assembly_panel.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/assembly_panel.py) / [ui_constants.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/ui_constants.py)
+- **背景**: UX 重构 Phase 1 Task 2 扩展装配面板语义为"文件夹透视器"（可透视任意
+  文件夹，不限于内容单元），面板名称仍为"装配面板"，是否改名待用户确认
+  （Task 2 遗留项，登记为技术债）。
+- **影响范围**: UI 文案与文档术语。
+- **决策（2026-08-02，UI合理性1）**: 显示名改为「文件夹预览」
+  （`ASSEMBLY_PANEL_TITLE`，v0.50.2 生效）；代码标识符
+  （`AssemblyPanel` / `assembly_panel.py` / `assembly_controller.py` /
+  `assembly_service.py` / `ASSEMBLY_*` 常量，共 17 个文件）保留 legacy 命名，
+  避免纯机械改名引入回归。
+- **建议修复阶段**: **UX 重构 Task 8**：代码标识符统一改名（与 TD-L28
+  术语统一一并处理），改名后同步更新 3 个测试文件与相关文档。
+
+### TD-L31: ui_constants 缩略图死常量与 WebP 实现不符 ✅ 已修复（UX 重构 Task 6）
+
+- **位置**: [ui_constants.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/ui_constants.py) `THUMBNAIL_SIZE` / `THUMBNAIL_FORMAT` / `THUMBNAIL_FILENAME_TEMPLATE`
+- **背景**: Stage 5 Task 1a 缩略图缓存已实现为 WebP 多档
+  （`{content_unit_id}_{size}.webp`，默认 256），但 ui_constants 仍保留 PNG 单档常量
+  （`THUMBNAIL_FORMAT="PNG"`、`THUMBNAIL_FILENAME_TEMPLATE="{unit_id}.png"`、
+  `THUMBNAIL_SIZE=64`），全项目无引用。
+- **影响范围**: 死代码，误导阅读者。
+- **修复（UX 重构 Task 6）**: 删除三个常量（THUMBNAIL_SIZE / THUMBNAIL_FORMAT /
+  THUMBNAIL_FILENAME_TEMPLATE），全项目无引用。
+
+### TD-L32: AssemblyService.remove_file 死代码 ✅ 已修复（UX 重构 Task 6）
+
+- **位置**: [assembly_service.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/application/assembly_service.py) `remove_file`
+- **背景**: UX 重构 Phase 1 Task 1 Commit 3（L2 提前）移除装配面板「移除文件」功能时，
+  UI/回调/常量已清理，但 `AssemblyService.remove_file` 方法及对应测试
+  （test_assembly_service.py）保留未删除，UI 层已无调用方。
+- **影响范围**: 死代码，维护成本。
+- **修复（UX 重构 Task 6）**: 删除 `remove_file` 方法及 test_assembly_service.py
+  对应测试。
+
+### TD-L33: 代码注释遗留"浏览/整理模式"描述 ✅ 已修复（UX 重构 Task 6）
+
+- **位置**: [main_window.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/main_window.py) /
+  [search_dialog.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/search_dialog.py) /
+  [tag_filter.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/tag_filter.py) /
+  [metadata_panel.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/metadata_panel.py) 等 docstring 与注释
+- **背景**: UX 重构 Phase 1 移除双模式后，部分代码注释仍描述"浏览模式/整理模式"
+  行为（如 search_dialog "Q5=C：整理模式下不跳转"），与当前单面板行为不符。
+- **影响范围**: 认知负担，不影响正确性。
+- **修复（UX 重构 Task 6）**: 清理 main_window / search_dialog / tag_filter /
+  metadata_panel / folder_tree_model / assembly_service / domain.models 中
+  遗留的"浏览/整理模式"注释。
+
+### TD-M37: 缩略图 Coordinator 生成链路未接入 UI ✅ 已修复（UI合理性16，2026-08-03）
+
+- **位置**: [thumbnail_coordinator.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/thumbnail_coordinator.py) `request_thumbnail` / [card_list_model.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/card_list_model.py) / [main_window.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/main_window.py)
+- **修复（UI合理性16，2026-08-03）**: 卡片视图恢复 Coordinator 链路——
+  MainWindow 注入 `_card_thumbnail_provider`，按 256 档 `request_thumbnail`
+  （覆盖全部缩放预设，最大档即 256）；生成服务默认 cover 方形居中裁剪
+  （无圆角/透明条，与卡片既有视觉一致）；未命中显示固定尺寸占位图标
+  （占地与缩略图一致，避免首屏批量生成时布局抖动），生成完成按行刷新；
+  缓存失效（封面变更）/启动 GC 复用既有 Service 链路。
+  TD-L34（每任务新建 QThread）按用户指示延后，不随本项处理。
+- **未覆盖场景**: 元数据面板封面预览仍直接加载原图（单图场景，不在接入范围）。
+
+### TD-M38: MainWindow 薄委托与文件操作编排待进一步拆分
+
+- **位置**: [main_window.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/main_window.py)
+- **背景**: UX 重构 Task 7 已拆出 TransactionScope / ScanController / AssemblyController /
+  MetadataView（核心逻辑与状态迁出），但 MainWindow 仍约 3800 行 / 149 方法：
+  1. 保留的薄委托方法（_bind_assembly_* / _follow_middle_selection_after_unpin /
+     _refresh_assembly_if_affected 等）可删除、改为直接调用控制器；
+  2. 文件操作编排（创建 Mod 组 / 重命名 / 删除 / 复制剪切粘贴 / 移动到 / 冲突解决）、
+     右键菜单构建、快捷键 handler、目录导航/视图状态等大块逻辑仍留在 MainWindow。
+- **影响范围**: 可维护性；任何 UI 改动仍需在大文件中找上下文。
+- **推荐修复方案**: 下个阶段单独小任务：先删除薄委托（对测试/回调无影响），
+  再按域拆出 FileOpsController（文件操作编排）与 NavigationView（目录导航/视图状态），
+  MainWindow 收敛为布局 + 组合根。
+- **建议修复阶段**: **Task 8（UI 美化）之后或与其并行**（用户确认，2026-08-02）。
+
+### TD-L34: ThumbnailCoordinator 每任务新建 QThread，生命周期开销与析构风险
+
+- **位置**: [thumbnail_coordinator.py](file:///c:/AphrosyneData/Skyrim-Content-Workbench/src/app/thumbnail_coordinator.py)
+  `_start_worker` / `_on_thread_finished`
+- **背景**: 每个缩略图任务新建 QThread + ThumbnailWorker，完成后 `deleteLater` 清理。
+  测试稳定性1（v0.50.4）排查确认原生崩溃与 coordinator 无直接因果（根因是
+  MetadataPanel 按钮 deleteLater 引用环），但每任务线程创建/销毁开销高
+  （TD-M37 已修复：2026-08-03 随 UI合理性16 接入卡片视图生产链路）。
+- **建议**: 改为单长驻 worker 线程 + 任务队列（与 ScanController 模式一致），
+  或保留现状接受开销。
+- **建议修复阶段**: 接入后若实测大批量缓存生成排队偏慢，再单列任务
+  （2026-08-03 更新：TD-M37 已修复，本项仍延后）。
 
 ---
 
@@ -738,12 +859,18 @@
    - 文档同步：architecture.md 更新到 schema v11；search_service.py Q2=A→Q2=B 注释修正
 
 6. **UI 重构版本处理**（用户决策：单独开分支）：
-   - TD-M21 + TD-M31（MainWindow God Object 拆分 + 业务逻辑泄漏）
-   - TD-H10 + TD-L25（FileOperationService 分层迁移 + helper 私有访问）
-   - TD-M26（MainWindow 集成测试，与拆分同步）
-   - TD-M35（rename/move 跨盘异常类型统一）
+   - **Task 6 先行**（数据库与死代码清理）：
+     - TD-L31（ui_constants 缩略图死常量）
+     - TD-L32（AssemblyService.remove_file 死代码）
+     - TD-L33（代码注释遗留"浏览/整理模式"描述，顺带）
+   - ~~TD-M21 + TD-M31（MainWindow God Object 拆分 + 业务逻辑泄漏）~~ ✅ 进行中（Task 7 控制器拆分完成，MainWindow 保留薄委托）
+   - ~~TD-H10 + TD-L25（FileOperationService 分层迁移 + helper 私有访问）~~ ✅ 已修复（Task 7 Commit 2）
+   - TD-M26（MainWindow 集成测试，与拆分同步）— 部分落地（test_scan_controller.py）
+   - ~~TD-M36（FileListView 统一，与拆分同步）~~ ✅ 已修复（Task 7 Commit 2）
+   - ~~TD-M35（rename/move 跨盘异常类型统一）~~ ✅ 已修复（Task 7 Commit 2）
    - TD-L24（FileEntry 类名与注释不一致）
    - TD-L28（UI 中"目录"和"文件夹"混用）
+   - TD-L30（装配面板命名"文件夹透视器"待用户确认）
    - UI 重构清单 8 项（详见 open-questions.md）
 
 7. **Stage 6 前处理**（数据一致性版本）：

@@ -11,8 +11,8 @@ ContentUnit / TagCategory / Tag / OperationHistory / FolderCache / ManagedRoot�
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import ClassVar
 
 
@@ -24,21 +24,21 @@ class ContentUnit:
     path 原样存储（可为中文），数据库以 path + path_key 列的 UNIQUE 约束去重
     （path_key 为 make_path_key(path)，DB 层强制路径归一化唯一）。
 
-    v11 schema（Stage 5 Code Review D2/D3）：
-    - 移除 status 字段，重构为 is_marked: bool
-    - True = 已标记为内容单元（原 'organized'），False = 已取消标记（原 'unmarked'）
-    - 简化两态语义为布尔值，消除 "organized" 字面歧义
+    v11 schema（Stage 5 Code Review D2/D3）：status 字段重构为 is_marked: bool。
+    v13 schema（UX 重构 Task 6）：移除 is_marked 字段，回归纯 DELETE 模式——
+    记录存在即已标记，取消标记 = DELETE 记录，无需表达"曾标记但已取消"的状态。
+    v15 schema（2026-08-05）：移除 title 列——UI合理性14 起已停止读写，
+    title 无任何用户语义，物理删除。
+    path_key 为 DB 层列（UNIQUE 约束），Domain 实体不含该字段。
     """
 
     id: str
     path: str
     created_at: str
     updated_at: str
-    title: str | None = None
     content_type: str = "mod"
     source_url: str | None = None
     cover_path: str | None = None
-    is_marked: bool = True
     notes: str | None = None
 
     # M13：Domain 层取值范围校验（与 OperationHistory.operation_type 校验对齐）
@@ -54,10 +54,6 @@ class ContentUnit:
             raise ValueError("ContentUnit.created_at 不能为空")
         if not self.updated_at:
             raise ValueError("ContentUnit.updated_at 不能为空")
-        if not isinstance(self.is_marked, bool):
-            raise ValueError(
-                f"ContentUnit.is_marked 必须是 bool，得到：{type(self.is_marked).__name__}"
-            )
         if self.content_type not in self.VALID_CONTENT_TYPES:
             raise ValueError(
                 f"ContentUnit.content_type 必须是 {sorted(self.VALID_CONTENT_TYPES)} 之一，"
@@ -67,19 +63,25 @@ class ContentUnit:
 
 @dataclass
 class TagCategory:
-    """标签分类。spec §4.2。"""
+    """标签分类。spec §4.2。
+
+    schema v15（2026-08-05）：color_hue → color_hex（完整 #RRGGBB，大写），
+    支持未来全功能选色（自定义 RGB / 十六进制输入）。
+    """
 
     id: str
     name: str
-    color_hue: int = 0
+    color_hex: str = "#D61A1A"
+
+    _HEX_RE = re.compile(r"^#[0-9A-F]{6}$")
 
     def __post_init__(self) -> None:
         if not self.id:
             raise ValueError("TagCategory.id 不能为空")
         if not self.name:
             raise ValueError("TagCategory.name 不能为空")
-        if self.color_hue < 0 or self.color_hue > 360:
-            raise ValueError("TagCategory.color_hue 必须在 0-360 之间")
+        if not self._HEX_RE.fullmatch(self.color_hex or ""):
+            raise ValueError("TagCategory.color_hex 必须是 #RRGGBB 大写十六进制")
 
 
 @dataclass
@@ -111,6 +113,11 @@ class OperationHistory:
     Stage 5 Task 3b：
     - 新增 operation_type='copy'：复制操作记录，source_path=原路径，target_path=新路径，
       can_undo=False（复制不可撤销，避免撤销=删除副本的语义模糊，Q4=A）。
+
+    操作便捷性1（2026-08-04）：
+    - 新增 operation_type='strip'：剥离操作记录（提取文件夹内容到上级），
+      source_path=被剥离文件夹，target_path=上级目录，can_undo=False
+      （多子项移动 + 空文件夹回收站删除的组合无法安全单条撤销，与 copy/delete 一致）。
     """
 
     id: str
@@ -123,7 +130,7 @@ class OperationHistory:
     undone_at: str | None = None
 
     VALID_OPERATION_TYPES: ClassVar[frozenset[str]] = frozenset(
-        {"move", "delete", "rename", "new_folder", "undo", "copy"}
+        {"move", "delete", "rename", "new_folder", "undo", "copy", "strip"}
     )
 
     def __post_init__(self) -> None:
@@ -139,8 +146,8 @@ class OperationHistory:
         if not self.created_at:
             raise ValueError("OperationHistory.created_at 不能为空")
         # TD-H1：operation_type 与 target_path 一致性校验
-        # move/rename/new_folder/copy 必须有 target_path；delete/undo 不允许 target_path
-        if self.operation_type in ("move", "rename", "new_folder", "copy"):
+        # move/rename/new_folder/copy/strip 必须有 target_path；delete/undo 不允许 target_path
+        if self.operation_type in ("move", "rename", "new_folder", "copy", "strip"):
             if not self.target_path:
                 raise ValueError(
                     f"OperationHistory.operation_type={self.operation_type} 要求 target_path 非空"
@@ -157,6 +164,11 @@ class OperationHistory:
         # Stage 5 Task 3b：copy 不可撤销（Q4=A，避免撤销=删除副本的语义模糊）
         if self.operation_type == "copy" and self.can_undo:
             raise ValueError("OperationHistory.operation_type=copy 不可撤销，can_undo 必须为 False")
+        # 操作便捷性1：strip（提取内容）不可撤销（组合操作无法安全单条撤销）
+        if self.operation_type == "strip" and self.can_undo:
+            raise ValueError(
+                "OperationHistory.operation_type=strip 不可撤销，can_undo 必须为 False"
+            )
         # Stage 5 Task 6：undo 记录本身不可再撤销（避免无限循环）
         if self.operation_type == "undo" and self.can_undo:
             raise ValueError(
@@ -266,7 +278,7 @@ class ThumbnailCache:
 class FileEntry:
     """目录条目（文件或文件夹）+ 可选的内容单元关联。
 
-    用于浏览模式中栏列表（roadmap Task 4 2026-07-13 设计修正）：
+    用于中栏文件列表（roadmap Task 4 2026-07-13 设计修正）：
     数据源为文件系统，content_unit 表仅作为标记来源。
     内容单元不是可见性门槛——所有文件系统条目均可见可操作。
 
@@ -296,26 +308,24 @@ class FileEntry:
 
 @dataclass
 class SearchResult:
-    """搜索结果项（Stage 5 Task 7）。
+    """搜索结果项（Stage 5 Task 7；UI合理性13 改为按文件名匹配）。
 
-    spec §8：搜索范围为内容单元标题 + 标签名 + 备注。
+    spec §8：搜索范围为内容单元文件名 + 标签名 + 备注。
     一个内容单元匹配多个字段时只返回一条记录，matched_field 取最高优先级
-    （标题 > 标签 > 备注，Q7=B）。
+    （名称 > 标签 > 备注，Q7=B）。
 
     - unit_id：内容单元 ID
-    - title：内容单元标题（可能为 None，UI 显示时回退到 path）
+    - name：内容单元文件名（path 的 basename）
     - path：内容单元路径
     - content_type：内容单元类型
-    - is_marked：是否已标记为内容单元（v11：Q2=B 仅搜索 is_marked=True）
-    - matched_field：命中的字段名（'title' / 'tag' / 'notes'），按优先级取
+    - matched_field：命中的字段名（'name' / 'tag' / 'notes'），按优先级取
     - tags：聚合的标签名列表（可能为空列表）
     """
 
     unit_id: str
-    title: str | None
+    name: str
     path: str
     content_type: str
-    is_marked: bool
     matched_field: str
     tags: list[str]
 
@@ -324,54 +334,8 @@ class SearchResult:
             raise ValueError("SearchResult.unit_id 不能为空")
         if not self.path:
             raise ValueError("SearchResult.path 不能为空")
-        if not isinstance(self.is_marked, bool):
+        if self.matched_field not in ("name", "tag", "notes"):
             raise ValueError(
-                f"SearchResult.is_marked 必须是 bool，得到：{type(self.is_marked).__name__}"
-            )
-        if self.matched_field not in ("title", "tag", "notes"):
-            raise ValueError(
-                f"SearchResult.matched_field 必须是 'title' / 'tag' / 'notes' 之一，"
+                f"SearchResult.matched_field 必须是 'name' / 'tag' / 'notes' 之一，"
                 f"得到：{self.matched_field}"
             )
-
-
-class AppMode(StrEnum):
-    """应用模式（spec §5.1/§5.2）。
-
-    - browse：浏览模式（默认），中栏跟随目录树节点刷新。
-    - organize：整理模式，中栏内容冻结，目录树变为目标选择器。
-    """
-
-    browse = "browse"
-    organize = "organize"
-
-
-@dataclass
-class StagingArea:
-    """暂存区标记。spec §5.2 整理模式。
-
-    用户标记的"暂存区"目录配置，独立于扫描缓存持久化——即使暂存区目录
-    未被扫描到或 folder_cache 被清理，标记仍保留。
-
-    real_path 原样存储（可为中文），path_key 用于比较与唯一约束（A2 决策）。
-    本模型不访问文件系统；路径合法性由调用方在 application 层校验。
-    """
-
-    id: str
-    real_path: str
-    path_key: str
-    created_at: str
-    updated_at: str
-    display_name: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.id:
-            raise ValueError("StagingArea.id 不能为空")
-        if not self.real_path:
-            raise ValueError("StagingArea.real_path 不能为空")
-        if not self.path_key:
-            raise ValueError("StagingArea.path_key 不能为空")
-        if not self.created_at:
-            raise ValueError("StagingArea.created_at 不能为空")
-        if not self.updated_at:
-            raise ValueError("StagingArea.updated_at 不能为空")

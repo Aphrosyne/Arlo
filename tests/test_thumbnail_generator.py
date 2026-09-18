@@ -119,13 +119,41 @@ def test_generate_custom_size(png_source, tmp_path):
         assert img.size == (48, 48)
 
 
-def test_generate_with_rounded_corners(png_source, tmp_path):
-    """Q2: C 圆角边框。验证输出有透明像素（圆角处）。"""
-    cache_path = tmp_path / "thumb.png"
-    generate_thumbnail(png_source, cache_path, size=64)
+# === UI合理性16：cover 方形居中裁剪模式 ===
+
+
+def test_horizontal_image_fills_square(jpg_source, tmp_path):
+    """横向图（100x80）填满 256x256，无透明填充条。"""
+    cache_path = tmp_path / "thumb.webp"
+    generate_thumbnail(jpg_source, cache_path, size=256)
     with Image.open(cache_path) as img:
-        # 圆角处应为透明（alpha=0）
-        alpha = img.split()[-1]
-        # 4 个角中至少一个应为完全透明
-        corner_alpha = alpha.getpixel((0, 0))
-        assert corner_alpha == 0  # 圆角处透明
+        assert img.size == (256, 256)
+        # 不透明源图输出可为 RGB（WebP 优化掉全不透明 alpha 通道）
+        if "A" in img.getbands():
+            alpha = img.split()[-1]
+            # 整幅 alpha 全为 255（无透明条、无圆角）
+            assert alpha.getextrema() == (255, 255)
+            assert alpha.getpixel((0, 0)) == 255  # 角不透明 → 无圆角
+
+
+def test_vertical_image_fills_square(tmp_path):
+    """竖向图（80x120，不透明）同样填满方形。"""
+    source = tmp_path / "vertical.jpg"
+    Image.new("RGB", (80, 120), color=(0, 0, 255)).save(source, format="JPEG")
+    cache_path = tmp_path / "thumb.webp"
+    generate_thumbnail(source, cache_path, size=128)
+    with Image.open(cache_path) as img:
+        assert img.size == (128, 128)
+        if "A" in img.getbands():
+            alpha = img.split()[-1]
+            assert alpha.getextrema() == (255, 255)
+
+
+def test_generate_keeps_source_signature(jpg_source, tmp_path):
+    """生成缩略图不修改源图。"""
+    original_size, original_mtime = get_source_signature(jpg_source)
+    cache_path = tmp_path / "thumb.webp"
+    generate_thumbnail(jpg_source, cache_path, size=256)
+    new_size, new_mtime = get_source_signature(jpg_source)
+    assert new_size == original_size
+    assert new_mtime == original_mtime

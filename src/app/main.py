@@ -22,23 +22,21 @@ from application.assembly_service import AssemblyService
 from application.clipboard_service import ClipboardService
 from application.content_service import ContentService
 from application.content_unit_creation_service import ContentUnitCreationService
+from application.file_operation_service import FileOperationService
 from application.folder_tree_service import FolderTreeService
 from application.managed_root_service import ManagedRootService
-from application.quick_insert_service import QuickInsertService
 from application.search_service import SearchService
-from application.staging_service import StagingService
+from application.strip_service import StripService
 from application.tag_service import TagService
 from application.thumbnail_service import ThumbnailService
 from application.undo_service import UndoService
 from infrastructure.db import get_connection, init_db
-from infrastructure.file_operation_service import FileOperationService
 from infrastructure.folder_cache_sync_helper import FolderCacheSyncHelper
 from infrastructure.repositories.content_unit import ContentUnitRepository
 from infrastructure.repositories.content_unit_tag import ContentUnitTagRepository
 from infrastructure.repositories.folder_cache import FolderCacheRepository
 from infrastructure.repositories.managed_root import ManagedRootRepository
 from infrastructure.repositories.operation_history import OperationHistoryRepository
-from infrastructure.repositories.staging_area import StagingAreaRepository
 from infrastructure.repositories.tag import TagRepository
 from infrastructure.repositories.tag_category import TagCategoryRepository
 from infrastructure.repositories.thumbnail_cache import ThumbnailCacheRepository
@@ -81,20 +79,27 @@ def main() -> int:
     # 后台扫描 worker 在自身线程内创建独立连接，不与本连接共享。
     conn = get_connection(db_path)
     conn.row_factory = sqlite3.Row
-    managed_root_service = ManagedRootService(ManagedRootRepository(conn))
-    staging_service = StagingService(StagingAreaRepository(conn))
-    folder_tree_service = FolderTreeService(
-        ManagedRootRepository(conn),
-        FolderCacheRepository(conn),
-        staging_service=staging_service,
+    # 共享 Repository / UoW 实例（Repository 为无状态包装，复用同一连接）
+    uow = UnitOfWork(conn)
+    managed_root_repo = ManagedRootRepository(conn)
+    folder_cache_repo = FolderCacheRepository(conn)
+    content_unit_repo = ContentUnitRepository(conn)
+    # UX 重构 Task 6：ManagedRootService 注入 folder_cache/content_unit 仓储，
+    # remove_root 时同步清理扫描记录（重叠守卫 + UoW 事务）。
+    managed_root_service = ManagedRootService(
+        managed_root_repo,
+        folder_cache_repo,
+        content_unit_repo,
+        uow=uow,
     )
+    folder_tree_service = FolderTreeService(managed_root_repo, folder_cache_repo)
 
     # Stage 4 Task 4：缩略图 service 先创建（Stage 4.5 M4：注入到 ContentService）
     # GC（Q8: B）：启动时清理无对应 content_unit 的缓存
     try:
         thumbnail_service = ThumbnailService(
             cache_repo=ThumbnailCacheRepository(conn),
-            content_unit_repo=ContentUnitRepository(conn),
+            content_unit_repo=content_unit_repo,
             thumbnails_dir=get_thumbnails_dir(),
             size=64,
         )
@@ -110,52 +115,49 @@ def main() -> int:
     # 保证原子性，调用方（MainWindow）不负责业务事务控制。
     # uow 绑定到主线程连接 conn，所有共享该连接的 Service 注入同一实例，
     # 支持跨 Service 嵌套事务（如 ContentUnitCreationService 调用 ContentService）。
-    uow = UnitOfWork(conn)
 
     # Stage 4.5 M4：ContentService 注入 thumbnail_service，
     # 使 update_metadata 修改 cover_path 时主动 invalidate 缩略图缓存。
     content_service = ContentService(
-        ContentUnitRepository(conn),
+        content_unit_repo,
         thumbnail_service=thumbnail_service,
         uow=uow,
     )
     # Stage 4.5 H4：FileOperationService 注入 FolderCacheSyncHelper + ContentUnitRepository，
     # new_folder/move 自动同步 folder_cache + ContentUnit.path，消除调用方手动同步。
-    # 各 Service（ContentUnitCreationService/AssemblyService/QuickInsertService）在 0.3c/d/e
-    # 移除各自的重复同步逻辑后，统一由 FileOperationService 内部同步。
-    folder_cache_repo = FolderCacheRepository(conn)
-    content_unit_repo = ContentUnitRepository(conn)
+    # 各 Service（ContentUnitCreationService/AssemblyService）移除各自的重复同步逻辑后，
+    # 统一由 FileOperationService 内部同步。
     folder_cache_helper = FolderCacheSyncHelper(folder_cache_repo)
     file_operation_service = FileOperationService(
         OperationHistoryRepository(conn),
         folder_cache_helper=folder_cache_helper,
         content_unit_repo=content_unit_repo,
     )
+    # 标签服务（阶段 4 Task 1）：标签分类 / 标签 CRUD + JSON 导入导出 + 预置加载
+    tag_service = TagService(
+        TagCategoryRepository(conn),
+        TagRepository(conn),
+        ContentUnitTagRepository(conn),
+    )
+
     # Stage 4.5 H4：ContentUnitCreationService 不再需要 folder_cache_repo，
     # folder_cache 同步由 FileOperationService 内部的 helper 自动完成。
+    # 操作合理性5（2026-08-04）：注入 tag_service，创建 Mod 组时继承源单元元数据。
     content_unit_creation_service = ContentUnitCreationService(
-        file_operation_service, content_service, uow=uow
+        file_operation_service, content_service, uow=uow, tag_service=tag_service
+    )
+    # 操作便捷性1（2026-08-04）：剥离（提取内容）
+    strip_service = StripService(
+        file_operation_service,
+        content_service,
+        OperationHistoryRepository(conn),
     )
     # 装配服务（阶段 3 Task 4）：使用同一个 file_operation_service 和 content_unit_repo
     # Stage 4.5 H4：folder_cache mtime 同步由 FileOperationService 内部 helper 自动完成，
     # AssemblyService 不再需要 folder_cache_repo。
     assembly_service = AssemblyService(
         file_operation_service,
-        ContentUnitRepository(conn),
-    )
-    # 快速插入服务（阶段 3 Task 5）：复用 file_op / content_unit_repo
-    # Stage 4.5 H4：folder_cache 同步由 FileOperationService 内部 helper 自动完成，
-    # QuickInsertService 不再需要 folder_cache_repo。
-    quick_insert_service = QuickInsertService(
-        file_operation_service,
-        ContentUnitRepository(conn),
-        uow=uow,
-    )
-    # 标签服务（阶段 4 Task 1）：标签分类 / 标签 CRUD + JSON 导入导出 + 预置加载
-    tag_service = TagService(
-        TagCategoryRepository(conn),
-        TagRepository(conn),
-        ContentUnitTagRepository(conn),
+        content_unit_repo,
     )
 
     # Stage 5 Task 6：操作历史撤销服务
@@ -200,22 +202,26 @@ def main() -> int:
     )
 
     app = QApplication(sys.argv)
+    # 输入控件右键菜单中文化（验收反馈 2026-08-04）：应用级事件过滤器，
+    # 覆盖 QLineEdit / QTextEdit / QPlainTextEdit 的复制/剪切/粘贴/全选。
+    from app.chinese_input_menu import ChineseInputContextMenuFilter  # noqa: PLC0415
+
+    app.installEventFilter(ChineseInputContextMenuFilter(app))
     window = MainWindow(
         managed_root_service,
         folder_tree_service,
         content_service,
         db_path,
         commit_callback=conn.commit,
-        staging_service=staging_service,
         content_unit_creation_service=content_unit_creation_service,
         assembly_service=assembly_service,
-        quick_insert_service=quick_insert_service,
         rollback_callback=conn.rollback,
         tag_service=tag_service,
         thumbnail_coordinator=thumbnail_coordinator,
         file_operation_service=file_operation_service,
         undo_service=undo_service,
         clipboard_service=clipboard_service,
+        strip_service=strip_service,
         search_service=search_service,
     )
     window.show()

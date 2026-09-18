@@ -46,7 +46,6 @@ class TestCreateAndGet:
         fetched = repo.get_by_id("u-1")
         assert fetched is not None
         assert fetched.path == "/mods/armor"
-        assert fetched.is_marked is True
 
     def test_get_by_id_not_exist(self, repo: ContentUnitRepository) -> None:
         assert repo.get_by_id("nonexistent") is None
@@ -98,14 +97,10 @@ class TestUpdate:
         unit = repo.get_by_id("u-1")
         assert unit is not None
 
-        unit.title = "新标题"
-        unit.is_marked = True
         unit.notes = "新增备注"
         unit.updated_at = "2026-07-13T00:00:00Z"
         updated = repo.update(unit)
 
-        assert updated.title == "新标题"
-        assert updated.is_marked is True
         assert updated.notes == "新增备注"
 
     def test_update_not_exist_raises(self, repo: ContentUnitRepository) -> None:
