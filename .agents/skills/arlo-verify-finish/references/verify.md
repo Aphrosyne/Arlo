@@ -1,15 +1,17 @@
-# 验证命令（SCW）
+# 验证命令（Arlo）
 
 先设置输出编码（避免中文输出乱码），再执行验证：
 
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     $env:PYTHONIOENCODING = "utf-8"
 
-在项目根目录执行，使用项目虚拟环境：
+在项目根目录优先使用项目虚拟环境：
 
     .venv\Scripts\python.exe -m ruff check src tests
     .venv\Scripts\python.exe -m ruff format --check src tests
     .venv\Scripts\python.exe -m pytest -q --tb=short
+
+如果项目虚拟环境不可用，先按 `AGENTS.md` 的规则实际检查 `python --version`、`py -0p` 和其他已配置入口，记录使用的解释器或环境阻塞，不要只根据 PATH 文本下结论。
 
 失败处理：
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Arlo 验证与收尾"
+  short_description: "按改动风险验证 Arlo 项目，并在授权后完成验收与提交收尾"
+  default_prompt: "使用 $arlo-verify-finish 验证当前改动并完成收尾"

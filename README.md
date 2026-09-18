@@ -1,8 +1,8 @@
-# Skyrim Content Workbench
+# Arlo
 
-本地优先的 Windows 桌面数字资产管理工具（Skyrim Mod 整理工作台）。真实文件系统是唯一的事实来源，数据库仅作为元数据增强层（标签、备注、来源 URL、封面关联等）。
+本地优先的 Windows 桌面数字资产管理工具，当前主要服务于 Skyrim Mod 的整理与浏览。真实文件系统是唯一的事实来源，数据库仅作为元数据增强层（标签、备注、来源 URL、封面关联等）。旧项目名为 Skyrim Content Workbench。
 
-> **开发状态**：当前为开发版本（[CHANGELOG.md](CHANGELOG.md) 最新 v0.51.0），工作集中在 `ux-redesign` 分支，尚未合并到 `master`、未发布正式版。
+> **开发状态**：当前为开发版本（[CHANGELOG.md](CHANGELOG.md) 最新 v0.51.1），工作分支和发布状态以 Git 与 CHANGELOG 为准，尚未发布正式版。
 
 ## 特性
 
@@ -45,9 +45,9 @@ python -m venv .venv
 
 ## 文档
 
-- [工程交接](docs/PROJECT_HANDOVER.md) · [规格](docs/spec.md) · [架构](docs/architecture.md)
-- [UX 重构路线图](docs/ux-redesign-roadmap.md) · [部署](docs/deployment.md)
-- [工作流测试问题记录](docs/workflow-test-issues.md) · [技术债](docs/technical-debt.md) · [未决问题](docs/open-questions.md)
+- [当前路线图](docs/roadmap.md) · [规格](docs/spec.md) · [架构](docs/architecture.md)
+- [部署](docs/deployment.md) · [技术债](docs/technical-debt.md) · [工作流测试问题记录](docs/workflow-test-issues.md)
+- [第二次重构讨论记录](docs/product-redesign-v2.md)
 - [变更日志](CHANGELOG.md)
 
 ## 许可

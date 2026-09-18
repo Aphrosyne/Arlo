@@ -18,15 +18,16 @@
 相关资料：
 
 根据任务来源选择：
-- 任务来自当前权威路线图（阶段推进）→ 必读对应章节；权威路线图文件名以 AGENTS.md 的"开发依据"为准
-  （当前为 docs/ux-redesign-roadmap.md；仓库另有 docs/roadmap.md 主路线图，两者独立，不要混淆）
-- 任务来自 `docs/workflow-test-issues.md` 或其他独立问题 → roadmap 按需阅读，不默认读取
+- 用户明确指定阶段/批次 → 阅读指定路线图的对应章节。
+- 其他阶段推进任务 → 按 `AGENTS.md` 选择当前活动路线图；当前默认是 `docs/roadmap.md`。
+- 任务来自 `docs/workflow-test-issues.md` 或其他独立问题 → roadmap 按需阅读，不默认读取。
+- `archive/` 下的历史文档和 `docs/product-redesign-v2.md` 讨论稿不作为默认实施依据。
 
 按需阅读（根据任务相关性选择，不要默认全部读取）：
 - docs/spec.md
 - docs/architecture.md
 - docs/technical-debt.md
-- docs/PROJECT_HANDOVER.md
+- docs/deployment.md
 
 禁止无目的扫描全部文档。
 
@@ -89,4 +90,4 @@ Commit 2：
 - 优先保证每一步可运行、可回滚
 - 如果发现设计问题，先提出问题并等待确认
 
-现在先输出实施计划，不开始编码。
+本模板用于规划模式：先输出实施计划，不开始编码。只有用户确认计划或明确授权实施既有计划后，才进入编码模式。

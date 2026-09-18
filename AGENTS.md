@@ -1,100 +1,118 @@
-# Skyrim Content Workbench — Coding Agent 工作说明
+# Arlo — Coding Agent 工作说明
 
-> 本文档为方向 C + UX 重构后的版本（2026-08-01 重写）。
+> 产品名已确定为 **Arlo**。仓库目录、Python 包、启动命令和应用数据目录仍保留旧名称，统一改名属于第二次产品方向重构的阶段 0，不要在普通功能任务中零散修改。
 >
-> 开发依据（按优先级）：
-> 1. `docs/PROJECT_HANDOVER.md`（最新工程交接）
-> 2. `docs/ux-redesign-roadmap.md`（UX 重构计划的权威文档）
-> 3. `docs/spec.md`、`docs/architecture.md`（存在部分过时章节，以代码 + CHANGELOG 为准）
-> 4. `docs/open-questions.md`、`docs/technical-debt.md`
+> 旧名称包括 `Skyrim Content Workbench`、`Skyrim-Content-Workbench`、`skyrim-mod-workbench`、`SkyrimContentWorkbench` 和历史代码中的 `SkyrimModWorkbench`。处理改名时必须考虑已有用户数据和旧入口的兼容性。
 
-**文档与代码冲突时，以代码为准，以 CHANGELOG.md 为修订史。**
+## 开发依据
 
-**版本号、分支名、Task 进度等易过期信息一律以代码与 CHANGELOG.md 为准，不得据此假定当前状态。**
+按以下顺序理解项目：
 
----
+1. 当前代码、测试和 Git 工作树状态：它们描述真实实现。
+2. `CHANGELOG.md`：用于理解已发生的变更，不代替代码验证。
+3. `docs/spec.md`：当前产品规格；其中仍可能有第一次重构留下的过时章节。
+4. `docs/architecture.md`、`docs/technical-debt.md`、`docs/deployment.md`：当前技术背景和已知债务。
+5. `docs/workflow-test-issues.md`：用户验收和实际使用记录；未明确确认的条目不自动视为需求。
+6. `docs/product-redesign-v2.md`：第二次产品方向重构的讨论记录，不是实施授权或最终规格。
 
-## 项目目标
+新的阶段 0 方案和路线图确定后，应将其加入本列表，并明确替代哪些旧说明。`archive/` 下的文件只作历史参考，不作为当前实现依据。
 
-实现 Skyrim Content Workbench：一个本地优先的 Windows 桌面数字资产管理工具。数据库是元数据增强层，真实文件系统是唯一的事实来源。核心概念是"内容单元"（一个文件夹或一个单文件），替代旧版的 ModItem + FileAsset 虚拟映射体系。
+推进路线图阶段时使用 `.agents/skills/arlo-stage/SKILL.md`；需要验证和收尾时使用 `.agents/skills/arlo-verify-finish/SKILL.md`。
+
+计划、旧文档、分支名和版本号与代码冲突时，以代码和可验证结果为准。不要因为文档中有复选框，就假定功能已经完成。
+
+## 项目定位
+
+Arlo 是一个本地优先的 Windows 桌面数字资产管理工具，当前主要服务于 Skyrim Mod 的整理、浏览和元数据管理。
+
+- 真实文件系统是文件内容和组织关系的唯一事实来源。
+- 数据库是元数据增强层，不替代用户文件。
+- `ContentUnit` 是当前核心概念，代表一个受管理的文件或文件夹以及其关联元数据。
+- 第二次重构正在重新评估快速整理、扁平资产目录、标签和归档等产品方向；在新路线图确认前，不要把讨论稿中的方案当作现行架构。
+
+## 当前状态与改名边界
+
+- 当前工程入口和许多模块仍使用旧名称；分支状态始终以 `git branch --show-current` 为准，不在本文件固定记录分支名。
+- 当前实现仍包含第一次重构遗留的暂存区、装配和旧工作流代码。新代码不得继续扩大这些遗留概念；需要触及时应先确认它是否属于阶段 0 清理范围。
+- 当前稳定 UI 是统一资源管理工作区；快速整理面板、卡片优先视图和新的资产根目录属于第二次重构方向，尚未视为现成功能。
+- 网盘上传/下载、云端同步、NAS 等属于已讨论但尚未完成规格确认的后续方向，不得自行扩展成实现。
+- `docs/product-redesign-v2.md` 中的正式决定应在确认后提炼到 `docs/spec.md` 和新的路线图，再将讨论稿归档。
 
 ## 不可违反的规则
 
-1. **真实文件系统是唯一的事实来源**。数据库不定义文件组织关系，仅保存目录无法表达的信息（中文别名、标签、备注、来源 URL、封面关联等）。
-2. **不实现未经确认的自动文件移动、删除、覆盖或重命名**。所有文件操作必须经过用户确认。
-3. **UI 层不得直接调用 `shutil`、`os.rename`、`Path.rename` 或其他文件写操作**。所有文件操作通过 `FileOperationService` 进行。
-4. **不引入 ModItem、FileAsset、FileRole、OperationLog（旧版四步状态机）等旧版概念**。新代码使用 ContentUnit、TagCategory、Tag、OperationHistory。
-5. **不假设文件名有统一格式**。Nexus Mods、汉化包、社区分享文件、预览图文件名之间没有可靠规律。
-6. **不读写压缩包内部内容**。
-7. **不修改用户原始图片**。缩略图缓存写入应用数据目录，不写入用户 Mod 目录。
-8. **所有新功能必须优先支持中文路径和 UTF-8**。数据库 TEXT 字段使用 Unicode，JSON 使用 UTF-8。
-9. **不得扩展到云端、账号、MO2 管理、自动爬取 Nexus 或未在规格中定义的功能**。
-10. **所有待确认需求必须保留 TODO 或明确注释**，不得自行假定产品决策。
+1. **真实文件系统是唯一事实来源。** 数据库只保存路径无法表达的信息，例如中文别名、标签、备注、来源 URL 和封面关联。
+2. **所有文件变更必须经过明确确认。** 不实现未经确认的自动移动、删除、覆盖或重命名；冲突必须可见并可选择处理。
+3. **文件操作必须经过应用服务。** UI 不得直接调用 `shutil`、`os.rename`、`Path.rename` 或其他文件写操作；统一通过 `FileOperationService` 等 Application 层服务进入 Infrastructure。
+4. **不继续引入旧版概念。** 新代码使用 `ContentUnit`、`TagCategory`、`Tag`、`OperationHistory` 等当前模型；不得重新引入 `ModItem`、`FileAsset`、`FileRole` 或旧四步状态机。触及遗留代码时优先隔离并留下清理计划。
+5. **不假设文件名有统一格式。** Nexus Mods、汉化包、社区分享文件和预览图的命名不可靠；名称提取必须有失败和人工修正路径。
+6. **不读写压缩包内部内容。** 除非未来规格明确改变此约束并单独评估安全、性能和失败行为。
+7. **不修改用户原始图片。** 缩略图和派生缓存写入应用数据目录，不写入用户 Mod 目录。
+8. **中文和 UTF-8 是一等公民。** 新功能必须支持中文路径、中文标题和 Unicode 数据；路径处理使用 `pathlib.Path`。
+9. **不扩展未经确认的范围。** 不自行加入账号体系、在线服务、MO2 管理、自动爬取 Nexus、云端同步或其他长期维护的后台能力。
+10. **所有未决需求必须显式保留。** 使用 TODO、未决问题或路线图条目记录，不得用猜测替代产品决策。
+11. **不得泄露私人内容。** 不提交密钥、Token、私人网盘链接、个人绝对路径、未确认可公开的素材或用户数据。
+12. **保护已有工作。** 开始前检查 `git status`；区分用户已有修改与当前任务，不擅自删除、覆盖、批量移动或格式化无关文件。
 
-## 开发方式
+## 架构约束
 
-- **分层开发**：UI → Application → Domain → Infrastructure，上层依赖下层。
-  - UI 不直接访问 Repository 或文件系统写操作，通过 Application Service 调用。
-  - Application 不包含领域规则（领域规则在 Domain 层实体校验中）。
-  - Infrastructure 为唯一允许直接操作数据库和文件系统的模块。
-- **每个 Task 完成后运行测试**：`ruff check src tests` + `ruff format --check src tests` + `pytest`。
-- **每次改动保持小而可审查**。一个 Task 对应一次有明确边界的改动。
-- **优先编写领域逻辑与测试，再接入 UI**。
-- **对涉及真实文件的测试，必须使用 pytest 临时目录**（`tmp_path` fixture）。
-- **不得用真实用户目录作为测试目录**。
-- **所有异常必须转换为用户可理解的错误信息**，并保留技术日志。
-- **不再往 MainWindow 堆方法**（UX 重构编码约束）：新增逻辑尽量抽到独立 controller / helper / view 中。
+- 分层依赖为 **UI → Application → Domain → Infrastructure**。
+  - UI 负责展示、输入和信号连接，不直接访问 Repository 或文件系统写操作。
+  - Application 编排用例，不把领域规则堆入窗口类。
+  - Domain 实体保持纯数据和校验，不依赖 Qt、数据库或文件系统。
+  - Infrastructure 是数据库和文件系统的直接访问边界。
+- 不再向 `MainWindow` 堆积新业务逻辑；新增逻辑优先放入职责明确的 controller、service、helper 或 view。
+- 路径比较和唯一约束统一使用 `make_path_key()`（`normcase + normpath`），不得依赖字符串大小写比较。
+- 数据库 schema 变更必须通过 `migrations.py` 注册幂等迁移，并更新相应测试和变更记录。
+- UI 文本集中管理；新 UI 代码应保留本地化边界，避免把可见文本散落在业务逻辑中。完整的双语/本地化适配待后续 UI 重构阶段完成。
+- 应用数据目录当前遵循 `SCW_DATA_DIR` 环境变量 → 项目根 `data/` → 程序所在位置 `data/` 的顺序。改名阶段不得直接废弃旧数据目录，应设计兼容或迁移方案。
 
-## 代码质量
+## 领域模型要点
 
-- 使用类型标注（Python 3.12+）。
-- 使用 `pathlib.Path` 处理路径。
-- 使用 ruff 格式化和静态检查（line-length=100）。
-- 核心文件操作必须有单元测试。
-- 数据库 schema 变更必须使用迁移函数（在 `migrations.py` 中注册，幂等）。
-- UI 文本使用中文，集中在 `ui_constants.py` 中定义。
-- 路径比较和唯一约束统一使用 `make_path_key()`（`normcase + normpath`），不依赖字符串大小写比较。
-
-## 领域模型概览
-
-（完整定义见 `docs/spec.md §4`；与代码冲突时以 `src/domain/models.py` 为准）
+当前主要实体包括：
 
 ```text
 ContentUnit        → 内容单元（path、path_key、title、content_type、source_url、cover_path、notes）
 TagCategory        → 标签分类（名称、色相值）
-Tag                → 标签（名称、所属分类，一个标签只属于一个分类）
-ContentUnitTag     → 内容单元 ↔ 标签（多对多）
-OperationHistory   → 操作历史（类型、源路径、目标路径、undone_at、can_undo）
+Tag                → 标签（名称、所属分类）
+ContentUnitTag     → 内容单元与标签的多对多关系
+OperationHistory   → 文件操作历史（类型、源路径、目标路径、撤销状态）
 ManagedRoot        → 受管理根目录
-FolderCache        → 目录树性能缓存（路径、父节点、上次扫描 mtime）
-ThumbnailCache     → 缩略图缓存（关联 content_unit_id，WebP 多档缓存）
+FolderCache        → 目录树性能缓存
+ThumbnailCache     → 缩略图缓存
 ```
 
-**ContentUnit 关键语义：**
+- 标记采用数据库记录是否存在表达；取消标记使用删除记录，不引入 `is_marked` 字段。
+- `ContentUnit` 不存 `status`、`rating` 等未经确认的状态字段。
+- 所有 Domain 实体不得包含数据库或文件系统知识。
 
-- 标记 = 数据库有记录；取消标记 = 删除记录（纯 DELETE 模式，`is_marked` 字段不存在）。
-- ContentUnit **不存 status、rating 字段**。
+## 开发方式
 
-所有 Domain 实体为纯 dataclass，不包含数据库或文件系统知识。
+- 开始任务前检查工作树、相关入口文件、调用链和配置；采用“入口文件 → 调用链 → 相关配置 → 必要时扩大范围”的顺序，避免无目的扫描。
+- 每次改动保持小而可审查；优先完成一个可验证闭环，不把无关重构混入当前任务。
+- 修复问题时处理根因，不用隐藏内容、关闭功能或吞掉异常掩盖问题。
+- 优先编写领域逻辑和测试，再接入 UI。
+- 涉及真实文件的测试必须使用 pytest 的 `tmp_path` 或等价临时目录，不得使用真实用户目录。
+- 所有异常都要转换为用户可理解的提示，同时保留技术日志。
+- 阶段性路线图必须遵守边界；未确认的后续阶段不得提前侵入当前任务。
 
-## 架构约束
+## 代码质量与验证
 
-- **Schema 版本**：以 `src/infrastructure/db.py` 中的 `CURRENT_SCHEMA_VERSION` 为准，变更历史见 CHANGELOG.md。
-- **分支**：以 git 当前分支为准；UX 重构的权威计划是 `docs/ux-redesign-roadmap.md`。
-- **应用数据目录解析优先级**：`SCW_DATA_DIR` 环境变量 > 项目根 `data/` > 程序文件所在位置 `data/`（2026-08-04 起不再回退 `%LOCALAPPDATA%` / 用户主目录，数据始终位于程序所在位置内）。默认位于项目根 `data/`（app.db、thumbnails/、exports/、logs/、settings.ini），`.gitignore` 已忽略 `/data/`。
-- **UI 单面板**：无浏览/整理模式切换，无暂存区，无快速插入。统一为目录树（左）+ 文件列表/卡片（中）+ 元数据/可钉住装配面板（右）。
-- **文件操作流程**：直接执行（move/rename/delete/new_folder），写入 operation_history，支持撤销。撤销不产生新记录，仅标记原记录 `undone_at`。
-- **扫描**：启动时自动增量扫描（基于目录 mtime），用户可手动全量重扫。不做实时文件系统监听。识别规则：所有压缩包文件自动标记为内容单元候选，文件夹由用户手动标记。
-- **缩略图**：关联键 `content_unit_id`，缓存格式 `{content_unit_id}_{size}.webp`（多档）。
-- **路径显示**：相对受管理根目录显示（含根目录名），外部路径加 `[外部]` 前缀，不显示绝对路径。
+- 使用 Python 3.12+ 类型标注、`pathlib.Path` 和 UTF-8。
+- Ruff 行宽为 100；常规验证命令：
 
-## 完成定义
+  ```text
+  ruff check src tests
+  ruff format --check src tests
+  pytest
+  ```
 
-一个功能只有在以下条件都满足时才算完成：
+- 判断 Python 是否可用时先实际执行 `python --version`；失败后再检查 `py -0p`、项目虚拟环境和其他已配置入口，不得仅根据 PATH 或 WindowsApps 别名下结论。
+- 纯文档整理可以不运行完整应用测试，但应检查链接、路径和文档索引；未执行的验证必须说明原因。
+- 核心文件操作、数据库迁移、中文路径和冲突处理必须有自动化测试。
 
-- 有明确输入、输出和失败行为。
-- 有至少一个自动化测试（纯 UI 微调可例外）。
-- 不会绕过安全规则（文件操作确认、冲突处理、回收站删除）。
-- 不会破坏中文路径支持。
-- 不会引入未讨论的产品范围（超出 `docs/spec.md` 定义）。
-- 文档或注释说明了关键约束。
+## Git 与交付
+
+- 提交和推送仅在用户明确要求时执行。
+- 提交标题采用 `<type>[(范围)]: <中文说明>`，例如 `docs: 整理 Arlo 项目开发规则`。
+- 一次提交只表达一个清晰目的，不把功能、无关重构和文档整理混在一起。
+- 完成定义：范围与用户确认一致；成功、失败和降级行为明确；相关验证通过或已说明阻塞原因；没有破坏中文路径、用户数据和安全边界；剩余工作被记录到合适的活动文档中。
