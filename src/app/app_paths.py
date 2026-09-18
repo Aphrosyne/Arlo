@@ -24,9 +24,8 @@ logger = logging.getLogger(__name__)
 
 APP_DATA_DIR_NAME = "Arlo"
 
-# 环境变量名。旧变量保留为只读兼容别名，避免现有用户配置失效。
+# 环境变量名。用于显式覆盖应用数据目录。
 ENV_DATA_DIR = "ARLO_DATA_DIR"
-LEGACY_ENV_DATA_DIR = "SCW_DATA_DIR"
 
 # 项目根目录标志文件（用于判断是否在开发环境运行）
 _PROJECT_MARKER = "pyproject.toml"
@@ -40,14 +39,14 @@ def get_app_data_root() -> Path:
 
     优先级（Task 0.5 + 2026-08-04 收紧）：
     1. ARLO_DATA_DIR 环境变量（显式指定，生产环境用）
-    2. 项目根目录/data/（开发环境默认）
+    2. 项目根目录/data/（开发环境默认，通过向上查找 pyproject.toml 判定）
     3. 程序文件所在位置/data/（打包/独立运行回退）
 
     2026-08-04（用户反馈）：所有数据写入始终位于程序所在位置内，
     不再回退 %LOCALAPPDATA% 或用户主目录。
     """
     # 1. 环境变量优先
-    env_data_dir = os.environ.get(ENV_DATA_DIR) or os.environ.get(LEGACY_ENV_DATA_DIR)
+    env_data_dir = os.environ.get(ENV_DATA_DIR)
     if env_data_dir:
         return Path(env_data_dir)
 

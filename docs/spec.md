@@ -1,4 +1,4 @@
-# Skyrim Content Workbench — 产品规格说明
+# Arlo — 产品规格说明
 
 > 本文档为方向 C 确认后的重写版。旧版已归档至 `archive/`。
 >
@@ -8,7 +8,7 @@
 
 ## 1. 项目定位
 
-Skyrim Content Workbench 是一个面向 Windows 的、本地优先（local-first）的本地数字资产管理工具（DAM, Digital Asset Management）。第一阶段专门优化 Skyrim Mod 的整理与浏览工作流，但核心模型（内容单元 + 路径 + 元数据）可扩展到教程、截图、视频项目等其他资产类型。
+Arlo 是一个面向 Windows 的、本地优先（local-first）的本地数字资产管理工具（DAM, Digital Asset Management）。第一阶段专门优化 Skyrim Mod 的整理与浏览工作流，但核心模型（内容单元 + 路径 + 元数据）可扩展到教程、截图、视频项目等其他资产类型。
 
 它不替代 Mod Organizer 2、Everything 或 Windows 资源管理器。它解决的核心问题是：用户有大量零散放置的本地数字资产（Mod 文件、教程、素材、截图），需要通过预览、中文信息、标签和可交互的目录树，快速完成识别、标记、分类与归档。
 
@@ -493,8 +493,7 @@ operation_log（旧）
 
 ### 11.4 Schema 版本
 
-当前 schema v13（UX 重构 Phase 2 Task 6 已完成：移除 `is_marked` 字段，回归纯 DELETE 模式——
-记录存在即已标记，取消标记 = DELETE 记录）。
+当前 schema v15（已完成 `content_unit.title` 列移除与 `tag_category` 完整颜色存储；记录存在即已标记，取消标记 = DELETE 记录）。
 
 ---
 

@@ -4,12 +4,20 @@
 
 在 1.0.0 之前，0.MINOR.PATCH 中的 MINOR 用于标记里程碑推进（roadmap 阶段/Task），PATCH 用于同里程碑内的修复与小幅调整。任何可能影响用户数据或破坏已有功能的变化都会使 MINOR 递增。
 
+## [0.51.5] - 2026-09-18
+
+**阶段 0：数据目录和活动文档收口**：
+  - 移除旧环境变量兼容逻辑及其测试、文档和历史配置引用；数据目录只使用 `ARLO_DATA_DIR`、项目 `data/` 和程序目录 `data/`。
+  - 清理活动文档中的旧项目简称、失效入口和旧绝对路径；历史记录保留边界已明确。
+  - 修复项目虚拟环境残留的旧目录路径，更新依赖锁定记录。
+  - Ruff 检查、格式检查和完整测试通过（1648 passed、4 skipped）。
+
 ## [0.51.4] - 2026-09-18
 
 **阶段 0：项目身份与开发入口统一（阶段性批次）**：
   - 将 Python 项目元数据和开发控制台入口统一为 `arlo`，窗口标题、Qt 对象名和相关内部标识同步改为 Arlo。
   - 新增项目根目录 `start_arlo.bat`；恢复项目 `.venv`，使用 Python 3.14.7 安装并验证 editable 包及开发依赖。
-  - 将 `ARLO_DATA_DIR` 设为新环境变量，保留 `SCW_DATA_DIR` 只读兼容读取；改名不触发用户数据迁移、移动、删除或数据库重建。
+  - 将 `ARLO_DATA_DIR` 设为唯一的显式数据目录变量；改名不触发用户数据迁移、移动、删除或数据库重建。
   - Ruff 检查、格式检查和完整测试通过（1649 passed、4 skipped）；使用临时数据目录验证 `arlo` 启动入口。
   - 本批次不代表阶段 0 完成；README/活动文档清理、旧命令兼容说明、CHANGELOG 后续收尾和最终阶段验收仍由路线图跟踪。
 ## [0.51.3] - 2026-09-18
@@ -1404,7 +1412,7 @@ Stage 5 Task 0.5：数据目录路径抽象与隔离（独立前置任务，不�
 
 **新增功能**
 
-- [app_paths.py](src/app/app_paths.py) 重构 `get_app_data_root`：路径决策优先级为 `SCW_DATA_DIR 环境变量 > 项目根 data/（开发环境，通过向上查找 pyproject.toml 判定）> %LOCALAPPDATA%\SkyrimContentWorkbench\（Windows 回退）> ~/.skyrimmodworkbench/（非 Windows 回退）`
+- [app_paths.py](src/app/app_paths.py) 重构 `get_app_data_root`：路径决策优先级为 `ARLO_DATA_DIR 环境变量 > 项目根 data/（开发环境，通过向上查找 pyproject.toml 判定）> %LOCALAPPDATA%\SkyrimContentWorkbench\（Windows 回退）> ~/.skyrimmodworkbench/（非 Windows 回退）`
 - [app_paths.py](src/app/app_paths.py) 新增 `_find_project_root`：从本文件向上查找最多 5 层，定位含 `pyproject.toml` 的项目根
 - [app_paths.py](src/app/app_paths.py) 新增 `_log_legacy_appdata_hint_if_exists`：检测到旧 `%LOCALAPPDATA%\SkyrimContentWorkbench\` 有数据且新目录无 `app.db` 时，输出日志提示用户手动复制 `app.db`、`thumbnails/`、`exports/`、`logs/` 到新目录。**不执行任何文件操作**（用户决策：程序不动数据）
 - [main.py](src/app/main.py) 通过 `ensure_app_directories()` 在启动时创建目录结构（入口未变，仅内部实现变化）
@@ -1413,18 +1421,18 @@ Stage 5 Task 0.5：数据目录路径抽象与隔离（独立前置任务，不�
 
 - 程序只负责创建新目录，不执行任何迁移、复制、移动、删除操作
 - 旧目录检测仅触发日志提示，不读取或复制旧目录内容
-- 测试 fixture 通过 `SCW_DATA_DIR` 环境变量严格隔离测试数据目录，避免污染项目 `data/`
+- 测试 fixture 通过 `ARLO_DATA_DIR` 环境变量严格隔离测试数据目录，避免污染项目 `data/`
 
 **配置变更**
 
-- 新增环境变量 `SCW_DATA_DIR`：显式指定应用数据目录路径（生产环境用）
+- 新增环境变量 `ARLO_DATA_DIR`：显式指定应用数据目录路径（生产环境用）
 - 新增 [.gitignore](.gitignore) 规则 `/data/`：忽略项目根运行时数据目录
-- 保留未来生产环境通过 `SCW_DATA_DIR` 切换到 AppData 的能力
+- 保留未来生产环境通过 `ARLO_DATA_DIR` 切换到 AppData 的能力
 
 **测试**
 
 - 新增 [tests/test_app_paths.py](tests/test_app_paths.py) 15 个测试：路径优先级（4）+ 项目根定位（2）+ 目录创建与幂等（2）+ 旧目录仅提示不动数据（4）+ 中文/空格路径与一致性（3）
-- 修复 [tests/conftest.py](tests/conftest.py) `temp_app_data` fixture：改用 `SCW_DATA_DIR` 隔离测试数据目录，避免测试写入项目 `data/` 污染
+- 修复 [tests/conftest.py](tests/conftest.py) `temp_app_data` fixture：改用 `ARLO_DATA_DIR` 隔离测试数据目录，避免测试写入项目 `data/` 污染
 - 全量回归：1048 passed, 3 skipped, ruff check + format 全通过
 
 **文档**

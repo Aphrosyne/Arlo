@@ -4,6 +4,8 @@
 > 不符合预期的行为、操作不流畅的地方、崩溃/报错复现步骤等。
 > 记录后按优先级整理为修复清单（建议格式：日期 / 现象 / 复现步骤 / 期望行为 / 优先级）。
 > 结构：未修复（待处理）在前，已修复（归档）在后；从已修复项拆出的「二期/后续规划」集中在「未修复」区。
+>
+> 文中的旧项目名和旧命令只表示当时的测试记录，不是当前入口；当前入口见 README 和部署文档。
 
 ## 未修复（待处理）
 
@@ -494,7 +496,7 @@
 - 验收反馈（2026-08-03）：中栏文件列表四列宽度同样接入固化——保存/恢复 +
   拖动即保存（键 layout/header/file_list），「重置布局」实时恢复默认宽度
 - 手动控制宽度默认值位置（手动配置适应）
-  全部集中在 [ui_constants.py](C:/AphrosyneData/Skyrim-Content-Workbench/src/app/ui_constants.py) 的「布局默认值」段：
+  全部集中在 [ui_constants.py](../src/app/ui_constants.py) 的「布局默认值」段：
   LAYOUT_MAIN_SPLITTER_DEFAULT_SIZES = (220, 480, 324) — 左/中/右三栏
   LAYOUT_RIGHT_SPLITTER_DEFAULT_SIZES = (625, 125) — 右栏元数据/装配面板
   FILE_LIST_COLUMN_WIDTHS = (0, 60, 80, 150) — 名称列是 Stretch（改它无效），改其余三列即可改变名称列分到的宽度

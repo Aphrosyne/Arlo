@@ -14,13 +14,13 @@
 ## 获取代码
 
 ```powershell
-git clone https://github.com/Aphrosyne/Skyrim-Content-Workbench.git
-cd Skyrim-Content-Workbench
-git checkout ux-redesign
+git clone https://github.com/Aphrosyne/Arlo.git
+cd Arlo
+git checkout master
 ```
 
-`ux-redesign` 是当前开发主线（默认分支 `master` 可能滞后）；使用 SSH 的话
-克隆地址为 `git@github.com:Aphrosyne/Skyrim-Content-Workbench.git`。
+当前开发主线为 `master`；使用 SSH 的话
+克隆地址为 `git@github.com:Aphrosyne/Arlo.git`。
 
 ## 创建虚拟环境并安装依赖
 
@@ -36,7 +36,7 @@ python -m venv .venv
 
 - `-e ".[dev]"` 为可编辑安装（editable），并同时安装开发依赖（pytest / ruff）。
 - 运行时依赖声明在 `pyproject.toml`：`PySide6>=6.8,<7`、`Pillow>=10.0`。
-- 仓库已附 `requirements.txt`（锁定 2026-08-05 实测版本，含 pytest/ruff）。
+- 仓库已附 `requirements.txt`（锁定 2026-09-18 实测版本，含 pytest/ruff）。
   想完全复现环境可执行 `pip install -r requirements.txt`——文件首行为 `-e .`，
   会一并安装项目本体（详见文件内注释）。
 
@@ -45,7 +45,7 @@ python -m venv .venv
 任选其一（在项目根目录执行）：
 
 ```powershell
-skyrim-mod-workbench
+.\.venv\Scripts\arlo.exe
 ```
 
 ```powershell
@@ -53,7 +53,7 @@ skyrim-mod-workbench
 ```
 
 ```powershell
-.venv\Scripts\python src/app/main.py
+.\start_arlo.bat
 ```
 
 ## 首次使用
@@ -74,7 +74,7 @@ skyrim-mod-workbench
 | `settings.ini` | 全部设置（布局/缩放/归档目录/快捷键/右键功能开关等） |
 | `exports/` | 导出目录 |
 
-- 可通过环境变量 `SCW_DATA_DIR` 覆盖数据目录（便携运行 / 测试用）。
+- 可通过环境变量 `ARLO_DATA_DIR` 覆盖数据目录（便携运行 / 测试用）。
 - 应用数据始终位于程序所在位置内，**不写 `%LOCALAPPDATA%`、不写注册表**。
 - 数据库只是元数据增强层，**真实文件系统是唯一事实来源**：删除 `data/`
   不会影响你的 Mod 文件，最多丢失元数据（标签、备注、来源 URL、封面关联等）。
@@ -89,7 +89,7 @@ skyrim-mod-workbench
 .venv\Scripts\python -m ruff format --check src tests
 ```
 
-当前全量测试：**1646 passed / 4 skipped**（2026-08-05）。
+当前全量测试：**1648 passed / 4 skipped**（2026-09-18）。
 
 ## 设备迁移 / 备份
 
@@ -105,13 +105,13 @@ skyrim-mod-workbench
 3. **中文路径**：程序全面支持中文路径与 UTF-8。
 4. **没有 release 安装包**：目前只能从源码运行，后续打包发布后会更新本文档。
 
-## 当前开发环境实测版本（2026-08-05）
+## 当前开发环境实测版本（2026-09-18）
 
 | 组件 | 版本 |
 |---|---|
-| Python | 3.14.0 |
+| Python | 3.14.7 |
 | pip | 26.2 |
-| PySide6 | 6.11.1 |
+| PySide6 | 6.11.2 |
 | Pillow | 12.3.0 |
 | pytest | 9.1.1 |
-| ruff | 0.16.0 |
+| ruff | 0.16.8 |

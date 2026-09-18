@@ -1,4 +1,4 @@
-# Skyrim Content Workbench — 架构设计
+# Arlo — 架构设计
 
 > 本文档为方向 C 确认后的重写版。旧版已归档至 `archive/`。
 >
@@ -639,19 +639,17 @@ ScanService.scan(managed_root)
 
 数据目录解析优先级（见 `app/app_paths.get_app_data_root()`）：
 
-1. `SCW_DATA_DIR` 环境变量指定路径
+1. `ARLO_DATA_DIR` 环境变量指定路径
 2. 项目根 `data/`（开发环境默认）
-3. `%LOCALAPPDATA%\SkyrimContentWorkbench\`（Windows 回退）
-4. `~/.skyrimmodworkbench/`（非 Windows 回退）
+3. 程序所在位置 `data/`（便携运行回退）
 
-**迁移策略（Task 0.5 用户决策）**：程序**不执行任何自动迁移、复制、删除操作**。
-旧目录检测提示代码已于 UX 重构 Task 6（v0.47.0）移除；
-`%LOCALAPPDATA%\SkyrimContentWorkbench\` 仍作为 Windows 回退路径保留
-（open-questions §7 决策）。
+**迁移策略（阶段 0）**：程序**不执行任何自动迁移、复制、删除操作**，也不读取
+`%LOCALAPPDATA%` 或用户目录。旧环境变量仅作为兼容入口保留；用户数据不会因项目
+重命名被自动改写。
 
 ```text
 {data_root}/
-  ├── app.db              # SQLite 数据库（schema v12）
+  ├── app.db              # SQLite 数据库（schema v15）
   ├── thumbnails/         # 缩略图缓存（{content_unit_id}_{size}.webp）
   ├── exports/            # AI JSON 导出
   └── logs/               # 应用日志（app.log，UTF-8，滚动）

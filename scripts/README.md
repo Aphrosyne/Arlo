@@ -85,7 +85,7 @@ python scripts/clear_legacy_titles.py --db PATH  # 指定数据库（测试用�
 
 - 只修改 content_unit.title，不触碰文件系统、不删除记录。
 - 幂等：重复执行结果一致。
-- 数据库路径默认由 `app.app_paths` 解析（SCW_DATA_DIR > 项目 data/ > 程序目录 data/ 回退）。
+- 数据库路径默认由 `app.app_paths` 解析（ARLO_DATA_DIR > 项目 data/ > 程序目录 data/ 回退）。
 
 ### 测试
 

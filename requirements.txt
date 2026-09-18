@@ -1,4 +1,4 @@
-# Skyrim Content Workbench 依赖锁定（2026-08-05）
+# Arlo 依赖锁定（2026-09-18）
 # 生成：.venv\Scripts\python -m pip freeze（剔除项目本体 editable 条目）
 # 用法：pip install -r requirements.txt
 #   - 首行 -e . 会一并安装项目本体（含 src 路径），无需再单独 pip install -e .
@@ -6,13 +6,13 @@
 -e .
 colorama==0.4.6
 iniconfig==2.3.0
-packaging==26.2
+packaging==26.3
 pillow==12.3.0
 pluggy==1.6.0
-Pygments==2.20.0
-PySide6==6.11.1
-PySide6_Addons==6.11.1
-PySide6_Essentials==6.11.1
+Pygments==2.21.0
+PySide6==6.11.2
+PySide6_Addons==6.11.2
+PySide6_Essentials==6.11.2
 pytest==9.1.1
-ruff==0.16.0
-shiboken6==6.11.1
+ruff==0.16.8
+shiboken6==6.11.2

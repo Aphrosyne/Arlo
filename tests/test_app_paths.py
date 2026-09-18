@@ -1,7 +1,7 @@
 r"""Task 0.5 app_paths 路径决策与目录创建测试。
 
 覆盖：
-- 路径优先级（环境变量 > 项目根 data/ > 程序目录 data/ 回退）
+- 路径优先级（ARLO_DATA_DIR > 项目根 data/ > 程序目录 data/ 回退）
 - _find_project_root 定位
 - 目录创建（ensure_app_directories）
 - 2026-08-04（用户反馈）：不再回退 LOCALAPPDATA / 用户主目录
@@ -34,7 +34,6 @@ def test_env_var_overrides_everything(tmp_path: Path, monkeypatch: pytest.Monkey
 def test_project_root_data_dir_in_dev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无环境变量 + 有 pyproject.toml → 返回项目根 data/。"""
     monkeypatch.delenv("ARLO_DATA_DIR", raising=False)
-    monkeypatch.delenv("SCW_DATA_DIR", raising=False)
 
     # mock _find_project_root 返回 tmp_path 作为项目根
     with patch.object(app_paths, "_find_project_root", return_value=tmp_path):
@@ -48,7 +47,6 @@ def test_fallback_to_program_dir_ignores_appdata(
 ) -> None:
     """无环境变量 + 无项目根 → 回退程序目录 data/；即使有 LOCALAPPDATA 也不使用。"""
     monkeypatch.delenv("ARLO_DATA_DIR", raising=False)
-    monkeypatch.delenv("SCW_DATA_DIR", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
 
     with patch.object(app_paths, "_find_project_root", return_value=None):
@@ -61,7 +59,6 @@ def test_fallback_to_program_dir_ignores_appdata(
 def test_no_fallback_to_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无项目根 + 无 LOCALAPPDATA → 仍回退程序目录 data/，不使用用户主目录。"""
     monkeypatch.delenv("ARLO_DATA_DIR", raising=False)
-    monkeypatch.delenv("SCW_DATA_DIR", raising=False)
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
     with patch.object(app_paths, "_find_project_root", return_value=None):
@@ -159,15 +156,6 @@ def test_env_var_with_spaces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     result = app_paths.get_app_data_root()
 
     assert result == custom
-
-
-def test_legacy_env_var_remains_supported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """旧环境变量仍可读取，保证已有启动配置继续有效。"""
-    custom = tmp_path / "legacy_data"
-    monkeypatch.delenv("ARLO_DATA_DIR", raising=False)
-    monkeypatch.setenv("SCW_DATA_DIR", str(custom))
-
-    assert app_paths.get_app_data_root() == custom
 
 
 def test_db_and_subdir_paths_consistent_with_root(

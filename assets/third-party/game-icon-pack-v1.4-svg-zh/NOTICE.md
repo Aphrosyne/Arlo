@@ -1,6 +1,6 @@
 # game-icon-pack（第三方图标库）
 
-本目录为第三方开源图标库的本地归档，仅供 Skyrim Content Workbench 引用。
+本目录为第三方开源图标库的本地归档，仅供 Arlo 引用。
 
 - 项目：game-icon-pack
 - 作者：Nieobie

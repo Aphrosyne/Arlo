@@ -1,8 +1,8 @@
 # Arlo — Coding Agent 工作说明
 
-> 产品名已确定为 **Arlo**。仓库目录、Python 包、启动命令和应用数据目录仍保留旧名称，统一改名属于第二次产品方向重构的阶段 0，不要在普通功能任务中零散修改。
+> 产品名已确定为 **Arlo**。仓库目录、Python 包、启动命令和默认应用数据目录已统一；`ARLO_DATA_DIR` 是唯一的显式数据目录变量。统一改名属于第二次产品方向重构的阶段 0，不要在普通功能任务中零散修改。
 >
-> 旧名称包括 `Skyrim Content Workbench`、`Skyrim-Content-Workbench`、`skyrim-mod-workbench`、`SkyrimContentWorkbench` 和历史代码中的 `SkyrimModWorkbench`。处理改名时必须考虑已有用户数据和旧入口的兼容性。
+> 历史名称包括 `Skyrim Content Workbench`、`Skyrim-Content-Workbench`、`skyrim-mod-workbench`、`SkyrimContentWorkbench` 和 `SkyrimModWorkbench`；它们只用于识别历史记录，不保留旧入口兼容。
 
 ## 开发依据
 
@@ -32,7 +32,7 @@ Arlo 是一个本地优先的 Windows 桌面数字资产管理工具，当前主
 
 ## 当前状态与改名边界
 
-- 当前工程入口和许多模块仍使用旧名称；分支状态始终以 `git branch --show-current` 为准，不在本文件固定记录分支名。
+- 当前工程入口已统一为 Arlo；少量旧名称只保留在兼容字段、迁移说明和历史记录中。分支状态始终以 `git branch --show-current` 为准，不在本文件固定记录分支名。
 - 当前实现仍包含第一次重构遗留的暂存区、装配和旧工作流代码。新代码不得继续扩大这些遗留概念；需要触及时应先确认它是否属于阶段 0 清理范围。
 - 当前稳定 UI 是统一资源管理工作区；快速整理面板、卡片优先视图和新的资产根目录属于第二次重构方向，尚未视为现成功能。
 - 网盘上传/下载、云端同步、NAS 等属于已讨论但尚未完成规格确认的后续方向，不得自行扩展成实现。
@@ -64,7 +64,7 @@ Arlo 是一个本地优先的 Windows 桌面数字资产管理工具，当前主
 - 路径比较和唯一约束统一使用 `make_path_key()`（`normcase + normpath`），不得依赖字符串大小写比较。
 - 数据库 schema 变更必须通过 `migrations.py` 注册幂等迁移，并更新相应测试和变更记录。
 - UI 文本集中管理；新 UI 代码应保留本地化边界，避免把可见文本散落在业务逻辑中。完整的双语/本地化适配待后续 UI 重构阶段完成。
-- 应用数据目录当前遵循 `SCW_DATA_DIR` 环境变量 → 项目根 `data/` → 程序所在位置 `data/` 的顺序。改名阶段不得直接废弃旧数据目录，应设计兼容或迁移方案。
+- 应用数据目录当前遵循 `ARLO_DATA_DIR` → 项目根 `data/` → 程序所在位置 `data/` 的顺序。阶段 0 不执行数据迁移、复制、删除或重建。
 
 ## 领域模型要点
 

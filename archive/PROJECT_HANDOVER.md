@@ -109,9 +109,9 @@
 - 应用数据目录创建
 
 **关键技术实现**：
-- 数据目录解析优先级：`SCW_DATA_DIR` 环境变量 > 项目根 `data/` > `%LOCALAPPDATA%\SkyrimContentWorkbench\` > `~/.skyrimmodworkbench/`
+- 数据目录解析优先级：`ARLO_DATA_DIR` 环境变量 > 项目根 `data/` > `%LOCALAPPDATA%\SkyrimContentWorkbench\` > `~/.skyrimmodworkbench/`
 - 程序**不执行任何自动迁移**，仅提示用户手动迁移（安全约束）
-- 测试通过 `SCW_DATA_DIR` 严格隔离测试数据目录
+- 测试通过 `ARLO_DATA_DIR` 严格隔离测试数据目录
 
 ## Stage 2：新骨架 + 基础浏览 ✅（v0.10.0 ~ v0.14.0，2026-07-12 ~ 2026-07-13）
 

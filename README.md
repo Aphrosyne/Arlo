@@ -1,8 +1,8 @@
 # Arlo
 
-本地优先的 Windows 桌面数字资产管理工具，当前主要服务于 Skyrim Mod 的整理与浏览。真实文件系统是唯一的事实来源，数据库仅作为元数据增强层（标签、备注、来源 URL、封面关联等）。旧项目名为 Skyrim Content Workbench。
+Arlo 是一个本地优先的 Windows 桌面数字资产管理工具，当前主要服务于 Skyrim Mod 的整理与浏览。真实文件系统是唯一的事实来源，数据库仅作为元数据增强层（标签、备注、来源 URL、封面关联等）。旧项目名仅作为历史兼容说明保留。
 
-> **开发状态**：当前为开发版本（[CHANGELOG.md](CHANGELOG.md) 最新 v0.51.4），工作分支和发布状态以 Git 与 CHANGELOG 为准，尚未发布正式版。
+> **开发状态**：当前为开发版本（[CHANGELOG.md](CHANGELOG.md) 最新 v0.51.5），工作分支和发布状态以 Git 与 CHANGELOG 为准，尚未发布正式版。
 
 ## 特性
 
@@ -20,17 +20,17 @@
 环境要求：Windows 10 / 11，Python 3.12+（开发环境实测 3.14）。详细步骤见 [docs/deployment.md](docs/deployment.md)。
 
 ```powershell
-git clone https://github.com/Aphrosyne/Skyrim-Content-Workbench.git
-cd Skyrim-Content-Workbench
+git clone https://github.com/Aphrosyne/Arlo.git
+cd Arlo
 python -m venv .venv
 .venv\Scripts\python -m pip install -U pip
 .venv\Scripts\python -m pip install -e ".[dev]"
-.venv\Scripts\python src/app/main.py
+.\.venv\Scripts\arlo.exe
 ```
 
 ## 数据目录
 
-应用数据目录解析优先级：`SCW_DATA_DIR` 环境变量 > 项目根 `data/` > 程序所在位置 `data/`。内容包含 `app.db`、`thumbnails/`、`logs/`、`exports/`、`settings.ini`，已被 `.gitignore` 忽略。
+应用数据目录解析优先级：`ARLO_DATA_DIR` 环境变量 > 项目根 `data/` > 程序所在位置 `data/`。内容包含 `app.db`、`thumbnails/`、`logs/`、`exports/`、`settings.ini`，已被 `.gitignore` 忽略。
 
 ## 开发
 
