@@ -2,7 +2,7 @@ r"""基础日志配置。
 
 日志写入应用数据目录下的 logs/app.log，UTF-8，滚动。
 数据目录解析优先级见 app_paths.get_app_data_root()：
-1. SCW_DATA_DIR 环境变量
+1. ARLO_DATA_DIR 环境变量
 2. 项目根 data/（开发环境）
 3. 程序文件所在位置 data/（打包/独立运行回退，2026-08-04 起不再写外部目录）
 所有异常应转换为用户可理解的错误信息，并保留技术日志（见 AGENTS.md 开发方式）。

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 # 窗口
-APP_TITLE = "Skyrim Content Workbench"
+APP_TITLE = "Arlo"
 WINDOW_DEFAULT_WIDTH = 1024
 WINDOW_DEFAULT_HEIGHT = 720
 
@@ -390,7 +390,7 @@ METADATA_PANEL_NOTES_EDIT_HEIGHT = 60  # 备注编辑框高度（可手动调整
 # 内部矩形、输入框一致的颜色）。
 # 圆角：Qt 的 border-radius 仅在声明边框时才对背景生效，因此用与背景同色的
 # 1px 边框（视觉无边框线）使圆角正常渲染。
-PANEL_REGION_OBJECT_NAME = "scwPanelRegion"
+PANEL_REGION_OBJECT_NAME = "arloPanelRegion"
 PANEL_REGION_STYLE_TEMPLATE = (
     "QWidget#{obj} {{ background: {bg}; border: 1px solid {bg}; border-radius: 4px; }}"
     "QScrollArea#{obj} > QWidget > QWidget {{ background: transparent; }}"

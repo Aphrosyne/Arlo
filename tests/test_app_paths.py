@@ -21,9 +21,9 @@ from app import app_paths
 
 
 def test_env_var_overrides_everything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """SCW_DATA_DIR 环境变量优先级最高。"""
+    """ARLO_DATA_DIR 环境变量优先级最高。"""
     custom = tmp_path / "custom_data"
-    monkeypatch.setenv("SCW_DATA_DIR", str(custom))
+    monkeypatch.setenv("ARLO_DATA_DIR", str(custom))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
 
     result = app_paths.get_app_data_root()
@@ -33,6 +33,7 @@ def test_env_var_overrides_everything(tmp_path: Path, monkeypatch: pytest.Monkey
 
 def test_project_root_data_dir_in_dev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无环境变量 + 有 pyproject.toml → 返回项目根 data/。"""
+    monkeypatch.delenv("ARLO_DATA_DIR", raising=False)
     monkeypatch.delenv("SCW_DATA_DIR", raising=False)
 
     # mock _find_project_root 返回 tmp_path 作为项目根
@@ -46,6 +47,7 @@ def test_fallback_to_program_dir_ignores_appdata(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """无环境变量 + 无项目根 → 回退程序目录 data/；即使有 LOCALAPPDATA 也不使用。"""
+    monkeypatch.delenv("ARLO_DATA_DIR", raising=False)
     monkeypatch.delenv("SCW_DATA_DIR", raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata"))
 
@@ -58,6 +60,7 @@ def test_fallback_to_program_dir_ignores_appdata(
 
 def test_no_fallback_to_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """无项目根 + 无 LOCALAPPDATA → 仍回退程序目录 data/，不使用用户主目录。"""
+    monkeypatch.delenv("ARLO_DATA_DIR", raising=False)
     monkeypatch.delenv("SCW_DATA_DIR", raising=False)
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
@@ -110,8 +113,8 @@ def test_ensure_app_directories_creates_dirs(
 ) -> None:
     """首次运行（无旧数据）创建所有子目录。"""
     new_root = tmp_path / "data"
-    monkeypatch.setenv("SCW_DATA_DIR", str(new_root))
-    # 清空 LOCALAPPDATA，保证路径解析只走 SCW_DATA_DIR
+    monkeypatch.setenv("ARLO_DATA_DIR", str(new_root))
+    # 清空 LOCALAPPDATA，保证路径解析只走 ARLO_DATA_DIR
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
     app_paths.ensure_app_directories()
@@ -125,7 +128,7 @@ def test_ensure_app_directories_creates_dirs(
 def test_ensure_app_directories_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """重复调用 ensure_app_directories 不报错（幂等）。"""
     new_root = tmp_path / "data"
-    monkeypatch.setenv("SCW_DATA_DIR", str(new_root))
+    monkeypatch.setenv("ARLO_DATA_DIR", str(new_root))
     monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
     app_paths.ensure_app_directories()
@@ -139,9 +142,9 @@ def test_ensure_app_directories_idempotent(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_env_var_with_chinese_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """SCW_DATA_DIR 含中文路径 → 正常工作。"""
+    """ARLO_DATA_DIR 含中文路径 → 正常工作。"""
     custom = tmp_path / "自定义数据目录"
-    monkeypatch.setenv("SCW_DATA_DIR", str(custom))
+    monkeypatch.setenv("ARLO_DATA_DIR", str(custom))
 
     result = app_paths.get_app_data_root()
 
@@ -149,13 +152,22 @@ def test_env_var_with_chinese_path(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def test_env_var_with_spaces(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """SCW_DATA_DIR 含空格 → 正常工作。"""
+    """ARLO_DATA_DIR 含空格 → 正常工作。"""
     custom = tmp_path / "my data dir"
-    monkeypatch.setenv("SCW_DATA_DIR", str(custom))
+    monkeypatch.setenv("ARLO_DATA_DIR", str(custom))
 
     result = app_paths.get_app_data_root()
 
     assert result == custom
+
+
+def test_legacy_env_var_remains_supported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """旧环境变量仍可读取，保证已有启动配置继续有效。"""
+    custom = tmp_path / "legacy_data"
+    monkeypatch.delenv("ARLO_DATA_DIR", raising=False)
+    monkeypatch.setenv("SCW_DATA_DIR", str(custom))
+
+    assert app_paths.get_app_data_root() == custom
 
 
 def test_db_and_subdir_paths_consistent_with_root(
@@ -163,7 +175,7 @@ def test_db_and_subdir_paths_consistent_with_root(
 ) -> None:
     """get_app_db_path / get_thumbnails_dir 等与 get_app_data_root 一致。"""
     custom = tmp_path / "custom"
-    monkeypatch.setenv("SCW_DATA_DIR", str(custom))
+    monkeypatch.setenv("ARLO_DATA_DIR", str(custom))
 
     root = app_paths.get_app_data_root()
     db = app_paths.get_app_db_path()

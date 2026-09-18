@@ -87,7 +87,7 @@ PROTECTED_NAMES = {
 }
 
 # 应用数据子目录名（用于校验保护逻辑）
-APP_DATA_DIR_NAME = "SkyrimContentWorkbench"
+APP_DATA_DIR_NAME = "Arlo"
 
 
 def find_safe_targets(root: Path) -> tuple[list[Path], list[Path]]:

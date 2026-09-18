@@ -1,15 +1,14 @@
 r"""应用数据目录管理（Task 0.5 数据目录迁移）。
 
 路径决策优先级：
-1. SCW_DATA_DIR 环境变量（显式指定，生产环境用）
+1. ARLO_DATA_DIR 环境变量（显式指定，生产环境用）
 2. 项目根目录/data/（开发环境默认，通过向上查找 pyproject.toml 判定）
 3. 程序文件所在位置/data/（打包/独立运行回退）
 
 2026-08-04（用户反馈）：不再回退 %LOCALAPPDATA% 或用户主目录——
 应用数据（数据库/缩略图/日志/设置）始终位于程序所在位置内，避免外部残留。
 本模块只负责路径决策与目录创建，**不执行任何数据迁移、复制、删除操作**。
-（UX 重构 Task 6：旧 `%LOCALAPPDATA%\SkyrimContentWorkbench\` 检测/迁移提示代码已移除；
-相关旧路径不再使用。）
+（UX 重构 Task 6：旧用户目录检测/迁移提示代码已移除；相关旧路径不再使用。）
 
 本模块不复制、不修改用户 Mod 文件；仅管理应用自身数据目录。"""
 
@@ -23,10 +22,11 @@ from PySide6.QtCore import QSettings
 
 logger = logging.getLogger(__name__)
 
-APP_DATA_DIR_NAME = "SkyrimContentWorkbench"
+APP_DATA_DIR_NAME = "Arlo"
 
-# 环境变量名（Task 0.5 决策 Q6=A）
-ENV_DATA_DIR = "SCW_DATA_DIR"
+# 环境变量名。旧变量保留为只读兼容别名，避免现有用户配置失效。
+ENV_DATA_DIR = "ARLO_DATA_DIR"
+LEGACY_ENV_DATA_DIR = "SCW_DATA_DIR"
 
 # 项目根目录标志文件（用于判断是否在开发环境运行）
 _PROJECT_MARKER = "pyproject.toml"
@@ -39,7 +39,7 @@ def get_app_data_root() -> Path:
     r"""返回应用数据根目录。
 
     优先级（Task 0.5 + 2026-08-04 收紧）：
-    1. SCW_DATA_DIR 环境变量（显式指定，生产环境用）
+    1. ARLO_DATA_DIR 环境变量（显式指定，生产环境用）
     2. 项目根目录/data/（开发环境默认）
     3. 程序文件所在位置/data/（打包/独立运行回退）
 
@@ -47,7 +47,7 @@ def get_app_data_root() -> Path:
     不再回退 %LOCALAPPDATA% 或用户主目录。
     """
     # 1. 环境变量优先
-    env_data_dir = os.environ.get(ENV_DATA_DIR)
+    env_data_dir = os.environ.get(ENV_DATA_DIR) or os.environ.get(LEGACY_ENV_DATA_DIR)
     if env_data_dir:
         return Path(env_data_dir)
 
@@ -83,7 +83,7 @@ def get_app_settings_path() -> Path:
     """返回应用设置文件路径（settings.ini）。
 
     2026-08-04（用户反馈）：QSettings 默认 NativeFormat 在 Windows 写入注册表，
-    统一改用应用数据目录下的 settings.ini 文件存储（跟随 SCW_DATA_DIR / data/ 解析）。
+    统一改用应用数据目录下的 settings.ini 文件存储（跟随 ARLO_DATA_DIR / data/ 解析）。
     """
     return get_app_data_root() / "settings.ini"
 

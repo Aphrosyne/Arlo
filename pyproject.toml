@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "skyrim-mod-workbench"
-version = "0.51.3"
-description = "Local-first Skyrim Mod 整理工作台"
+name = "arlo"
+version = "0.51.4"
+description = "Local-first Arlo 数字资产管理工具"
 requires-python = ">=3.12"
 dependencies = [
     # PySide6 版本：文档未固定。下限 6.8 以保证所需控件；
@@ -23,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-skyrim-mod-workbench = "app.main:main"
+arlo = "app.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

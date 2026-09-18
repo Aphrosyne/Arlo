@@ -159,10 +159,10 @@ class AssemblyPanel(QFrame):
         # 装配面板与左栏「受管理根目录 / 目录树」同构（UI合理性8 布局修复）：
         # 最外层 1px 浅色细边框（#c0c0c0，视觉白色）→ 外层背景透明显示窗体
         # 底色（近黑）→ 内部文件列表放在灰色圆角矩形（palette Base）中。
-        self.setObjectName("scwAssemblyPanel")
+        self.setObjectName("arloAssemblyPanel")
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setStyleSheet(
-            "QFrame#scwAssemblyPanel { background: transparent; "
+            "QFrame#arloAssemblyPanel { background: transparent; "
             "border: 1px solid #c0c0c0; border-radius: 4px; }"
         )
         layout = QVBoxLayout(self)

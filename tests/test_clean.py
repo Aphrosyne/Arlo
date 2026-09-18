@@ -315,7 +315,7 @@ class TestMainDryRun:
 class TestProtectedNames:
     def test_app_data_dir_name(self) -> None:
         """应用数据目录名正确。"""
-        assert APP_DATA_DIR_NAME == "SkyrimContentWorkbench"
+        assert APP_DATA_DIR_NAME == "Arlo"
 
     def test_critical_names_protected(self) -> None:
         """关键名称在受保护集合中。"""

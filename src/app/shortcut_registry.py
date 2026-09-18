@@ -232,7 +232,7 @@ class ShortcutRegistry:
     def _unregister_all(self) -> None:
         """卸载宿主上的全部已注册快捷键（禁用 + 待删），并清理宿主属性。
 
-        快捷键列表挂在宿主上（``_scw_registered_shortcuts``），
+        快捷键列表挂在宿主上（``_arlo_registered_shortcuts``），
         保证 MainWindow 每次新建 ShortcutRegistry 重注册时也能先卸载旧键。
         """
         for shortcut in self._host_shortcuts():
@@ -245,6 +245,6 @@ class ShortcutRegistry:
 
     def _host_shortcuts(self) -> list[QShortcut]:
         """宿主上的已注册快捷键列表（跨 registry 实例共享）。"""
-        if not hasattr(self._host, "_scw_registered_shortcuts"):
-            self._host._scw_registered_shortcuts = []  # noqa: SLF001
-        return self._host._scw_registered_shortcuts  # noqa: SLF001
+        if not hasattr(self._host, "_arlo_registered_shortcuts"):
+            self._host._arlo_registered_shortcuts = []  # noqa: SLF001
+        return self._host._arlo_registered_shortcuts  # noqa: SLF001
