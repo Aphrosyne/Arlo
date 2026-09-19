@@ -60,3 +60,55 @@ def test_scan_reports_missing_or_invalid_root_without_writing(tmp_path: Path) ->
     file_root.write_text("x", encoding="utf-8")
     result = AssetLibraryScanner().scan(file_root)
     assert result.issues[0].code == "root_not_directory"
+
+
+def test_scan_reports_unreadable_entry_and_continues(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "ManagedLibrary"
+    root.mkdir()
+    good = root / "Good"
+    good.mkdir()
+    broken = root / "Broken"
+    broken.mkdir()
+    original_lstat = Path.lstat
+
+    def fail_broken_entry(path: Path) -> object:
+        if path == broken:
+            raise OSError("simulated entry failure")
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", fail_broken_entry)
+
+    result = AssetLibraryScanner().scan(root)
+
+    assert [unit.name for unit in result.content_units] == ["Good"]
+    assert any(issue.code == "entry_unreadable" and issue.path == broken for issue in result.issues)
+
+
+def test_scan_reports_unreadable_root(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "ManagedLibrary"
+    root.mkdir()
+
+    def fail_root_iterdir(path: Path) -> object:
+        if path == root:
+            raise OSError("simulated root failure")
+        return Path.iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", fail_root_iterdir)
+
+    result = AssetLibraryScanner().scan(root)
+
+    assert result.content_units == ()
+    assert result.issues[0].code == "root_unreadable"
+
+
+def test_scan_accepts_empty_tag_list_as_valid_metadata(tmp_path: Path) -> None:
+    root = tmp_path / "ManagedLibrary"
+    unit = root / "No Tags"
+    unit.mkdir(parents=True)
+    (unit / "arlo.ini").write_text("[Arlo]\nschema=1\ntags=\n", encoding="utf-8")
+
+    result = AssetLibraryScanner().scan(root)
+
+    assert result.content_units[0].tags == ()
+    assert result.content_units[0].metadata_state is MetadataState.VALID
+    assert not result.has_errors

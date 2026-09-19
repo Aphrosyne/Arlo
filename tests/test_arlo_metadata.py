@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -45,3 +46,19 @@ def test_invalid_metadata_is_reported(tmp_path: Path, contents: str, message: st
 def test_write_requires_existing_content_unit_directory(tmp_path: Path) -> None:
     with pytest.raises(ArloMetadataError, match="目录不存在"):
         write_arlo_metadata(tmp_path / "missing" / "arlo.ini", ["clothing"])
+
+
+def test_write_replace_failure_preserves_existing_metadata(tmp_path: Path, monkeypatch) -> None:
+    metadata_path = tmp_path / "arlo.ini"
+    metadata_path.write_text("old metadata", encoding="utf-8")
+
+    def fail_replace(source: str, target: Path) -> None:
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+
+    with pytest.raises(ArloMetadataError, match="无法写入"):
+        write_arlo_metadata(metadata_path, ["ube"])
+
+    assert metadata_path.read_text(encoding="utf-8") == "old metadata"
+    assert not list(tmp_path.glob(".arlo.ini.*.tmp"))
