@@ -21,3 +21,20 @@ def test_save_tags_writes_through_application_service(tmp_path: Path) -> None:
 def test_save_tags_rejects_non_directory(tmp_path: Path) -> None:
     with pytest.raises(AssetLibraryMetadataError, match="不存在或不是普通目录"):
         AssetLibraryService().save_tags(tmp_path / "missing", ["ube"])
+
+
+def test_scan_index_is_rebuildable_and_supports_filtering(tmp_path: Path) -> None:
+    root = tmp_path / "ManagedLibrary"
+    unit_path = root / "My Outfit"
+    unit_path.mkdir(parents=True)
+    (unit_path / "arlo.ini").write_text("[Arlo]\nschema=1\ntags=clothing,ube\n", encoding="utf-8")
+    (root / "Weapon").mkdir()
+
+    index = AssetLibraryService().scan_index(root)
+
+    assert index.find_by_path(Path(str(unit_path))) is not None
+    assert [unit.name for unit in index.filter_by_tags(["ube"])] == ["My Outfit"]
+    assert [unit.name for unit in index.search("outfit")] == ["My Outfit"]
+    assert [unit.name for unit in index.search("UBE")] == ["My Outfit"]
+    rebuilt = AssetLibraryService().scan_index(root)
+    assert rebuilt.content_units == index.content_units

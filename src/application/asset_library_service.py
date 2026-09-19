@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from application.asset_library_index import AssetLibraryIndex
 from application.errors import ApplicationError
 from domain.asset_library import AssetLibraryScanResult
 from infrastructure.arlo_metadata import ARLO_INI_FILENAME, ArloMetadataError, write_arlo_metadata
@@ -26,6 +27,10 @@ class AssetLibraryService:
     def scan(self, root: Path) -> AssetLibraryScanResult:
         """扫描现役根目录，结果可直接由文件系统重建。"""
         return self._scanner.scan(root)
+
+    def scan_index(self, root: Path) -> AssetLibraryIndex:
+        """扫描并建立一个可丢弃、可重建的运行时索引。"""
+        return AssetLibraryIndex.from_scan(self.scan(root))
 
     def save_tags(self, content_unit_path: Path, tags: list[str] | tuple[str, ...]) -> None:
         """为现有内容单元保存标签。"""
