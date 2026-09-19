@@ -6,7 +6,11 @@ from pathlib import Path
 
 import pytest
 
-from application.asset_library_service import AssetLibraryMetadataError, AssetLibraryService
+from application.asset_library_service import (
+    AssetLibraryMetadataError,
+    AssetLibraryService,
+    AssetLibraryTagError,
+)
 
 
 def test_save_tags_writes_through_application_service(tmp_path: Path) -> None:
@@ -59,3 +63,27 @@ def test_save_tags_reports_duplicate_ids_without_creating_metadata(tmp_path: Pat
         AssetLibraryService().save_tags(unit_path, ["ube", "ube"])
 
     assert not (unit_path / "arlo.ini").exists()
+
+
+def test_add_and_remove_initial_tags_are_idempotent(tmp_path: Path) -> None:
+    unit_path = tmp_path / "My Unit"
+    unit_path.mkdir()
+    service = AssetLibraryService()
+
+    service.add_tag(unit_path, "equipment")
+    service.add_tag(unit_path, "equipment")
+    service.add_tag(unit_path, "gameplay")
+    service.remove_tag(unit_path, "equipment")
+    service.remove_tag(unit_path, "equipment")
+
+    assert (unit_path / "arlo.ini").read_text(encoding="utf-8") == (
+        "[Arlo]\nschema=1\ntags=gameplay\n"
+    )
+
+
+def test_add_tag_rejects_non_initial_tag(tmp_path: Path) -> None:
+    unit_path = tmp_path / "My Unit"
+    unit_path.mkdir()
+
+    with pytest.raises(AssetLibraryTagError, match="不在阶段 1 初始目录"):
+        AssetLibraryService().add_tag(unit_path, "author")

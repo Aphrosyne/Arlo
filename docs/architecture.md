@@ -105,7 +105,7 @@ MainWindow
 ```
 
 > UX 重构 Phase 1 起为单面板统一工作区（无浏览/整理模式切换，无暂存区/快速插入）。
-> 未注入 TagService 时 MetadataPanel 降级为只读 `_metadata_label`（兼容旧测试）。
+> 未注入 TagService 时 MetadataPanel 降级为只读 `_metadata_label`（兼容旧测试）。阶段 1 新资产库使用扁平初始标签目录和 `AssetLibraryService` 的添加/移除接口；旧标签管理 UI 仅作为待隔离遗留。
 
 ### 3.2 组件职责
 
@@ -115,12 +115,12 @@ MainWindow
 | `FolderTreeModel` | `folder_tree_model.py` | QAbstractItemModel，惰性加载目录树 |
 | `FileListModel` | `file_list_model.py` | 中栏详细列表 QAbstractListModel（文件系统条目 + 内容单元标记 + 排序） |
 | `CardListModel` | `card_list_model.py` | 中栏大图卡片视图 QAbstractListModel（封面 + 名称） |
-| `TagFilterBar` | `tag_filter.py`（新建） | 标签分类展开 + 标签多选筛选 |
+| `TagFilterBar` | `tag_filter.py`（新建） | 扁平标签多选筛选；不提供阶段 1 标签分类层级 |
 | `AssemblyPanel` | `assembly_panel.py` | 右栏下方装配面板（文件夹透视器 + 📌 钉住 + 拖拽 drop target + 右键继承中栏操作） |
 | `MetadataPanel` | `metadata_panel.py`（新建） | 元数据编辑表单（标题/标签/来源/备注/封面），显式保存按钮，标签 chip + 自动补全 |
 | `BatchTagDialog` | `batch_tag_dialog.py`（新建） | 批量打标签对话框（添加/移除模式 + chip + 自动补全） |
 | `CoverPickerDialog` | `cover_picker_dialog.py`（新建） | 封面选择对话框（IconMode 缩略图列表，默认选中第一张或当前封面） |
-| `TagManagerDialog` | `tag_manager_dialog.py` | 标签分类/标签 CRUD + JSON 导入导出 |
+| `TagManagerDialog` | `tag_manager_dialog.py` | 旧标签分类/标签 CRUD 界面；阶段 1 不接入固定标签目录 |
 | `MoveToDialog` | `move_to_dialog.py` | "移动到……"目标目录选择对话框（内嵌 FolderTreeModel） |
 | `ConflictResolutionDialog` | `conflict_resolution_dialog.py` | 冲突解决对话框（覆盖/跳过/重命名） |
 | `OperationHistoryDialog` | `operation_history_dialog.py` | 操作历史对话框（含撤销，Tooltip 显示详情） |
