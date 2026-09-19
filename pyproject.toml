@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "arlo"
-version = "0.52.1"
+version = "0.52.2"
 description = "Local-first Arlo 数字资产管理工具"
 requires-python = ">=3.12"
 dependencies = [

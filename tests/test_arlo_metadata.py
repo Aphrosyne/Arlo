@@ -29,6 +29,7 @@ def test_write_and_read_metadata_uses_sorted_stable_ids(tmp_path: Path) -> None:
     [
         ("[Arlo]\nschema=2\ntags=clothing\n", "schema"),
         ("[Arlo]\nschema=1\ntags=中文\n", "内容无效"),
+        ("[Arlo]\nschema=1\ntags=ube,ube\n", "内容无效"),
         ("[Other]\nschema=1\ntags=clothing\n", "必须只包含"),
         ("[Arlo]\nschema=1\ntags=clothing\nextra=value\n", "不支持"),
     ],

@@ -70,7 +70,10 @@ def write_arlo_metadata(path: Path, tags: list[str] | tuple[str, ...]) -> None:
     if not path.parent.is_dir():
         raise ArloMetadataError("内容单元目录不存在")
 
-    normalized_tags = normalize_tag_ids(tags)
+    try:
+        normalized_tags = normalize_tag_ids(tags)
+    except ValueError as exc:
+        raise ArloMetadataError(f"无法写入 arlo.ini：{exc}") from exc
     text = f"[{ARLO_SECTION}]\nschema={ARLO_SCHEMA}\ntags={','.join(normalized_tags)}\n"
     temporary_path: Path | None = None
     try:

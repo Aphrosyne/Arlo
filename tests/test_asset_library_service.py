@@ -38,3 +38,24 @@ def test_scan_index_is_rebuildable_and_supports_filtering(tmp_path: Path) -> Non
     assert [unit.name for unit in index.search("UBE")] == ["My Outfit"]
     rebuilt = AssetLibraryService().scan_index(root)
     assert rebuilt.content_units == index.content_units
+
+
+def test_scan_index_handles_unicode_names_and_normalized_paths(tmp_path: Path) -> None:
+    root = tmp_path / "中文资产库"
+    unit_path = root / "服装测试"
+    unit_path.mkdir(parents=True)
+
+    index = AssetLibraryService().scan_index(root)
+
+    assert index.find_by_path(root / "." / unit_path.name) is not None
+    assert [unit.name for unit in index.search("服装")] == ["服装测试"]
+
+
+def test_save_tags_reports_duplicate_ids_without_creating_metadata(tmp_path: Path) -> None:
+    unit_path = tmp_path / "Duplicate Tags"
+    unit_path.mkdir()
+
+    with pytest.raises(AssetLibraryMetadataError, match="不能重复"):
+        AssetLibraryService().save_tags(unit_path, ["ube", "ube"])
+
+    assert not (unit_path / "arlo.ini").exists()
